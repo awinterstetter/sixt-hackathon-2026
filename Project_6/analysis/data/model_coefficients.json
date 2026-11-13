@@ -1,0 +1,43 @@
+{
+  "quick_exterior_cleaning": {
+    "intercept": 4.786004271347404,
+    "exterior_dirt": 0.549407100872132,
+    "queue_length": -0.05377171616134395,
+    "staff = 2": 3.7381017805441017,
+    "staff = 3": -0.6188594393018476
+  },
+  "normal_exterior_cleaning": {
+    "intercept": 10.888655494705667,
+    "exterior_dirt": 2.4066348096253014,
+    "queue_length": -0.8710539635017694
+  },
+  "special_cleaning": {
+    "intercept": 29.482749316446238,
+    "smoking_reported": 7.59989620254436
+  },
+  "interior_cleaning": {
+    "intercept": 10.661709661668507,
+    "interior_dirt": 1.6901746198390846,
+    "child_seat": 7.571337423010692,
+    "queue_length": 0.18476856123532925
+  },
+  "damage_check": {
+    "intercept": 3.040182813043664
+  },
+  "refuel": {
+    "intercept": 6.7607435947613705,
+    "staff = 2": 6.850919118424818,
+    "staff = 3": -0.4134863661925086
+  },
+  "electric_charging": {
+    "intercept": 7.01113054794893,
+    "battery_soc_pct": 0.3006070632732288
+  },
+  "quick_damage_repair": {
+    "intercept": 59.05910913057908,
+    "damage_reported": 23.70034157921736
+  },
+  "tyre_check": {
+    "intercept": 21.23111634127144
+  }
+}
