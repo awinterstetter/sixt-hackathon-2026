@@ -162,14 +162,14 @@ class _Data:
 
 def _design(df, staff, hp):
     """Driver columns per task (first column = intercept).
-    "corr": a driver is used if |r| >= 0.1 and p < 0.05 between it and the task's true duration on validation
-    (tasks performed only). Branch type = staff level here (airport 3, station 2, center 1), so it enters as s2/s3."""
+    "corr": a driver is used if |r| >= 0.1 and p < 0.05 / 199 (Bonferroni over all 199 task x variable tests) between
+    it and the task's true duration on validation (tasks performed only). Branch type = staff level here (airport 3, station 2, center 1), so it enters as s2/s3."""
     one, soc = np.ones(len(df)), df.battery_soc_pct.fillna(50).values
     q = [df.queue_length] if hp["queue_in_cleaning"] else []
     s2, s3 = staff == 2, staff == 3
     vc = df.vehicle_class.values
     van, suv, premium = vc == "van", vc == "suv", vc == "premium"
-    rain, weekend = (df.weather == "rain").values, (df.weekday >= 5).values
+    rain = (df.weather == "rain").values
     if hp["covariates"] == "base":
         cols = {
             "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3],
@@ -186,13 +186,13 @@ def _design(df, staff, hp):
         cols = {
             "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3, van],
             "normal_exterior_cleaning": [one, df.exterior_dirt, *q, van, rain],
-            "special_cleaning": [one, df.smoking_reported, df.child_seat, df.pet, premium],
+            "special_cleaning": [one, df.smoking_reported, premium],
             "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q, df.rental_days, df.km_driven / 100, s3],
             "damage_check": [one, df.damage_reported],
-            "refuel": [one, s2, s3, suv, van, rain, weekend],
-            "electric_charging": [one, 100 - soc, weekend],
-            "quick_damage_repair": [one, df.damage_reported, soc],
-            "tyre_check": [one, s3, df.return_hour],
+            "refuel": [one, s2, s3, suv, van],
+            "electric_charging": [one, 100 - soc],
+            "quick_damage_repair": [one, df.damage_reported],
+            "tyre_check": [one, s3],
         }
     return {t: np.column_stack([np.asarray(c, dtype=float) for c in v]) for t, v in cols.items()}
 
