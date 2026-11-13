@@ -170,6 +170,20 @@ $line: #DDDDDD;
 .kpi.main .knum { color: $orange; }
 .ksub { display: block; font-size: 22px; color: $body; }
 
-.kpis3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; margin-top: 120px; }
-.kpis3 .kpi { padding: 48px 40px; }
-.kpis3 .knum { font-size: 130px; white-space: nowrap; }
+.kpis3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; margin-top: 8px; }
+.kpis3 .kpi { padding: 20px 32px; }
+.kpis3 .knum { font-size: 96px; white-space: nowrap; }
+
+.figs2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 20px; align-items: start; }
+.reveal .figs2 img { width: 100%; height: auto; max-height: 470px; object-fit: contain; margin: 0; }
+.figs2 p { margin: 0; }
+
+.figs3 { display: grid; grid-template-columns: 1fr 1.25fr 1.25fr; gap: 20px; margin-top: 20px; align-items: center; }
+.reveal .figs3 img { width: 100%; height: auto; max-height: 560px; object-fit: contain; margin: 0; }
+.figs3 p { margin: 0; }
+
+.figs2b { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 32px; margin-top: 20px; align-items: center; }
+.reveal .figs2b img { width: 100%; height: auto; max-height: 560px; object-fit: contain; margin: 0; }
+.figs2b p { margin: 0; }
+
+.reveal img.fullfig { display: block; max-height: 800px; width: auto; max-width: 100%; margin: 0 auto; }

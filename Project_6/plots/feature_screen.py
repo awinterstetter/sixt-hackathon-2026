@@ -4,8 +4,8 @@ For each task: least squares on the rows where the task was performed, scored by
   base     = covariates currently used in solution.py (_design)
   add  X   = base + one unused candidate      (negative delta = candidate helps)
   drop X   = base - one used covariate         (positive delta = covariate was helping)
-Run from Project_6/:  .venv/Scripts/python.exe analysis/feature_screen.py
-Writes analysis/figures/feature_screen.csv.
+Run from Project_6/:  .venv/Scripts/python.exe plots/feature_screen.py
+Writes plots/figures/feature_screen.csv.
 """
 from pathlib import Path
 
@@ -17,20 +17,21 @@ DATA = HERE.parent / "data"
 TASKS = ["quick_exterior_cleaning", "normal_exterior_cleaning", "special_cleaning", "interior_cleaning",
          "damage_check", "refuel", "electric_charging", "quick_damage_repair", "tyre_check"]
 STAFF = {"AIRPORT": 3, "STATION": 2, "CENTER": 1}
-CURRENT = {  # as in solution._design (queue_in_cleaning = True)
-    "quick_exterior_cleaning": ["exterior_dirt", "queue_length", "staff"],
-    "normal_exterior_cleaning": ["exterior_dirt", "queue_length"],
-    "special_cleaning": ["smoking_reported"],
-    "interior_cleaning": ["interior_dirt", "child_seat", "queue_length"],
-    "damage_check": [],
-    "refuel": ["staff"],
+CURRENT = {  # as in solution._design (HP["covariates"] = "corr", queue_in_cleaning = True)
+    "quick_exterior_cleaning": ["exterior_dirt", "queue_length", "staff", "van"],
+    "normal_exterior_cleaning": ["exterior_dirt", "queue_length", "van", "rain"],
+    "special_cleaning": ["smoking_reported", "premium"],
+    "interior_cleaning": ["interior_dirt", "child_seat", "queue_length", "rental_days", "km_driven", "staff3"],
+    "damage_check": ["damage_reported"],
+    "refuel": ["staff", "suv", "van"],
     "electric_charging": ["battery_missing"],
     "quick_damage_repair": ["damage_reported"],
-    "tyre_check": [],
+    "tyre_check": ["staff3"],
 }
 CANDIDATES = ["interior_dirt", "exterior_dirt", "child_seat", "pet", "smoking_reported", "damage_reported",
               "fuel_missing", "battery_missing", "km_driven", "rental_days", "vehicle_class", "powertrain",
-              "weather", "queue_length", "staff", "branch", "return_hour", "weekday"]
+              "weather", "queue_length", "staff", "branch", "return_hour", "weekday",
+              "van", "suv", "premium", "rain", "staff3"]
 
 
 def blocks(va):
@@ -42,6 +43,8 @@ def blocks(va):
         "fuel_missing": 100 - va.fuel_level_pct.fillna(100), "battery_missing": 100 - va.battery_soc_pct.fillna(50),
         "km_driven": va.km_driven / 100, "rental_days": va.rental_days, "queue_length": va.queue_length,
         "return_hour": va.return_hour,
+        "van": va.vehicle_class == "van", "suv": va.vehicle_class == "suv", "premium": va.vehicle_class == "premium",
+        "rain": va.weather == "rain", "staff3": staff == 3,
     }
     out = {k: np.asarray(v, float)[:, None] for k, v in num.items()}
     cat = {"vehicle_class": va.vehicle_class, "powertrain": va.powertrain, "weather": va.weather,
@@ -78,7 +81,9 @@ if __name__ == "__main__":
             v = lodo_mae(design([x for x in CURRENT[t] if x != c]), y, dd)
             rows.append({"task": t, "n": int(m.sum()), "change": "drop", "covariate": c, "mae": v, "delta": v - base})
         for c in CANDIDATES:
-            if c in CURRENT[t] or (c == "branch" and "staff" in CURRENT[t]):
+            if c in CURRENT[t] or (c in ("branch", "staff3") and "staff" in CURRENT[t]) \
+                    or (c in ("van", "suv", "premium") and "vehicle_class" in CURRENT[t]) \
+                    or (c == "rain" and "weather" in CURRENT[t]):
                 continue
             v = lodo_mae(design(CURRENT[t] + [c]), y, dd)
             rows.append({"task": t, "n": int(m.sum()), "change": "add", "covariate": c, "mae": v, "delta": v - base})

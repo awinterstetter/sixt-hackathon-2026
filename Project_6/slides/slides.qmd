@@ -182,8 +182,26 @@ Three steps. First, the structural fit: Powell’s method chooses the task coeff
 :::
 :::
 
+::: {.figs2b}
+![](figures/11_task_durations_estimated.png)
+
+![](figures/10_total_breakdown.png)
+:::
+
 ::: {.notes}
 On the full validation week the total error is 13.6 minutes and the per-task weighted error is 0.14. Common tasks are within about two minutes; normal exterior is underestimated by a few minutes, and the rare repair and tyre check carry the largest errors. Most effects are believable: child seat, smoking, reported damage, missing battery, and airports refuelling more but checking tyres less. Two are not: vans faster on normal exterior, and damage check too long when damage is reported. Even with the true task times our process rule leaves about 13 minutes of total error, so the remaining error is waiting.
+:::
+
+## Fitted coefficients {.ht}
+
+[04 · Results · coefficients]{.eyebrow}
+
+[Fitted effects per task, in minutes]{.h2}
+
+![](figures/07_per_task_model_covariates.png){.fullfig}
+
+::: {.notes}
+Each row is one task formula. The first column is the base time in minutes; the other orange cells are the minutes a covariate adds, for example child seat plus six minutes on interior, damage reported plus twenty minutes on repair, tyre check twelve minutes shorter at airports. Grey cells are covariates that did not pass the Bonferroni rule for that task.
 :::
 
 ## {.appendix-card background-color="#191919"}

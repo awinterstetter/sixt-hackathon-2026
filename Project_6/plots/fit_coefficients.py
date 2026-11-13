@@ -1,8 +1,8 @@
 """Fit starter/solution.py on train.csv once and save the per-task regression coefficients for plotting.
 
-Run from Project_6/:  .venv/Scripts/python.exe analysis/fit_coefficients.py
-Writes analysis/data/model_coefficients.json (task -> {covariate: coefficient in minutes}).
-Takes as long as one fit() (about 12 minutes).
+Run from Project_6/:  .venv/Scripts/python.exe plots/fit_coefficients.py
+Writes plots/data/model_coefficients.json (task -> {covariate: coefficient in minutes}).
+Takes as long as one fit() (about 3 minutes).
 """
 import importlib.util
 import json
@@ -18,32 +18,8 @@ sol = importlib.util.module_from_spec(spec); spec.loader.exec_module(sol)
 
 
 def covariate_names(hp):
-    """Column names in the same order as solution._design()."""
-    q = ["queue_length"] if hp["queue_in_cleaning"] else []
-    if hp.get("covariates", "base") == "base":
-        return {
-            "quick_exterior_cleaning": ["intercept", "exterior_dirt", *q, "staff = 2", "staff = 3"],
-            "normal_exterior_cleaning": ["intercept", "exterior_dirt", *q],
-            "special_cleaning": ["intercept", "smoking_reported"],
-            "interior_cleaning": ["intercept", "interior_dirt", "child_seat", *q],
-            "damage_check": ["intercept"],
-            "refuel": ["intercept", "staff = 2", "staff = 3"],
-            "electric_charging": ["intercept", "battery_soc_pct"],   # enters as 100 - SOC
-            "quick_damage_repair": ["intercept", "damage_reported"],
-            "tyre_check": ["intercept"],
-        }
-    return {   # "corr" covariate set
-        "quick_exterior_cleaning": ["intercept", "exterior_dirt", *q, "staff = 2", "staff = 3", "van"],
-        "normal_exterior_cleaning": ["intercept", "exterior_dirt", *q, "van", "rain"],
-        "special_cleaning": ["intercept", "smoking_reported", "premium"],
-        "interior_cleaning": ["intercept", "interior_dirt", "child_seat", *q, "rental_days", "km_driven / 100",
-                              "staff = 3"],
-        "damage_check": ["intercept", "damage_reported"],
-        "refuel": ["intercept", "staff = 2", "staff = 3", "suv", "van"],
-        "electric_charging": ["intercept", "battery_soc_pct"],   # enters as 100 - SOC
-        "quick_damage_repair": ["intercept", "damage_reported"],
-        "tyre_check": ["intercept", "staff = 3"],
-    }
+    """Column names in the same order as solution._design (defined in solution.COVARIATES)."""
+    return sol.covariate_names(hp)
 
 
 if __name__ == "__main__":
@@ -51,12 +27,8 @@ if __name__ == "__main__":
     branches = pd.read_csv(P6 / "data" / "branch_data.csv")
     t0 = time.time()
     model = sol.fit(train, branches)
-    names = covariate_names(model["hp"])
-    out = {}
-    for t in sol.TASKS:
-        coef = model["theta"][model["slices"][t]]
-        assert len(coef) == len(names[t]), f"{t}: {len(coef)} coefficients but {len(names[t])} names"
-        out[t] = {n: float(c) for n, c in zip(names[t], coef)}
+    tab = sol.coefficient_table(model)
+    out = {t: dict(zip(g.covariate, g.coefficient)) for t, g in tab.groupby("task", sort=False)}
     (HERE / "data").mkdir(exist_ok=True)
     (HERE / "data" / "model_coefficients.json").write_text(json.dumps(out, indent=2))
     print(f"fit {time.time() - t0:.0f}s; wrote {HERE / 'data' / 'model_coefficients.json'}")

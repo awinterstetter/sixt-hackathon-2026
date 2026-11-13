@@ -1,24 +1,24 @@
 # Submission: Project 6 – Task Time Detective, lmu-stads
 
-**Team:** lmu-stads · **Demo:** ⏳ `submission/slides.pdf`
+**Team:** lmu-stads · **Demo:** [`submission/slides.pdf`](slides.pdf)
 
 ## Approach
 Train only has **total** times, so we rebuild each car's path from return to ready and fit the task formulas so the
 rebuilt totals match the real ones (car $i$: return $t_i$, $k_i$ staff, $f_{it}=1$ if task $t$ done):
 
 $$d_{it} = f_{it}\max(0.5,\, x_{it}^\top \beta_t), \quad
-\text{work}_i = \max\Big(d_{i,\text{charge}},\, \min_{a \in \mathcal{A}(k_i)} \max_{p} \sum_{c:\,a(c)=p} \sum_{t \in c} d_{it}\Big), \quad
-\hat{y}_i = \mathrm{clock}_{b_i}\big(t_i,\, W_i + \text{work}_i\big)$$
+\mathrm{work}_i(\beta) = \max\Big(d_{i,\text{charge}},\, \min_{a \in \mathcal{A}(k_i)} \max_{p} \sum_{c:\,a(c)=p} \sum_{t \in c} d_{it}\Big), \quad
+\hat{y}_i = \mathrm{clock}_{b_i}\big(t_i,\, \mathrm{wait}_i(\gamma) + \mathrm{work}_i(\beta)\big)$$
 
 Task chains (interior→special, damage check→repair, exterior, refuel, tyre check) are split over the staff; the car is
-ready when the busiest person is done. Charging runs in parallel. Waiting $W_i = \max(0, z_i^\top\gamma_{k_i})$ is a
+ready when the busiest person is done. Charging runs in parallel. Waiting $\mathrm{wait}_i(\gamma) = \max(0, z_i^\top\gamma_{k_i})$ is a
 median regression per staff level (center 1, station 2, airport 3). Only opening hours count.
 
 **Fitting** (train.csv only, numpy/pandas/scipy, deterministic, ~3 min):
 1. Starting values: median total with the task minus without it.
 2. Powell minimises the absolute total error on 8,000 seeded cars.
 3. EM, 30 rounds: each car's unexplained time $g_i$ is shared over its critical-path tasks and waiting by variance,
-   $\hat d_{it} = \mu_{it} + g_i\,\sigma_t^2 / (\sum_{s \in \mathcal{C}_i} \sigma_s^2 + \sigma_W^2)$; each $\beta_t$ is refit by least squares.
+   $\hat d_{it} = \mu_{it} + g_i\,\sigma_t^2 / (\sum_{s \in \mathcal{C}_i} \sigma_s^2 + \sigma_{\mathrm{wait}}^2)$; each $\beta_t$ is refit by least squares.
 4. Waiting model fit on the remaining open minutes.
 
 ## Final coefficients β (minutes)
@@ -28,15 +28,15 @@ waiting at return, flags are 0/1, station/airport vs. city center.
 
 | Task | Intercept | Drivers |
 |---|--:|---|
-| Quick exterior | 9.51 | exterior dirt +0.18, queue +0.16, station −0.27, airport +3.52, van −2.50 |
+| Quick exterior | 9.51 | exterior dirt +0.18, queue +0.16, station −0.30, airport +3.52, van −2.49 |
 | Normal exterior | 13.42 | exterior dirt +0.92, queue +0.13, van −8.80, rain −0.19 |
 | Special cleaning | 26.93 | smoking +3.59, premium +2.63 |
-| Interior | 10.14 | interior dirt +1.29, child seat +5.98, queue +0.15, rental day +0.12, per 100 km +0.06, airport +0.61 |
-| Damage check | 2.55 | damage reported +3.48 |
-| Refuel | 6.29 | station +2.16, airport +5.93, SUV +0.07, van +6.33 |
-| Charging | 2.90 | per % missing battery +0.34 |
-| Repair | 49.49 | damage reported +20.48 |
-| Tyre check | 31.35 | airport −12.30 |
+| Interior | 10.14 | interior dirt +1.29, child seat +5.98, queue +0.15, rental day +0.12, per 100 km +0.05, airport +0.61 |
+| Damage check | 2.55 | damage reported +3.49 |
+| Refuel | 6.29 | station +2.18, airport +5.91, SUV +0.07, van +6.35 |
+| Charging | 2.89 | per % missing battery +0.34 |
+| Repair | 49.48 | damage reported +20.47 |
+| Tyre check | 31.31 | airport −12.26 |
 
 **Waiting** (median regression per staff level; backlog, daily load and work in minutes of predicted work per staff,
 time since opening in hours, capped at 4):

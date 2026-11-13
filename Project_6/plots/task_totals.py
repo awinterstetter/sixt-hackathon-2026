@@ -1,7 +1,7 @@
 """Descriptive plots: which tasks drive total turnaround time?
 
-Run from Project_6/:  .venv/Scripts/python.exe analysis/task_totals.py
-Writes PNGs into analysis/figures/.
+Run from Project_6/:  .venv/Scripts/python.exe plots/task_totals.py
+Writes PNGs into plots/figures/.
 """
 from pathlib import Path
 
@@ -362,18 +362,12 @@ def fig6_branch_map(tr, va):
 
 # Covariates of each per-task regression in starter/solution.py (_design, with HP["queue_in_cleaning"] = True).
 # Keep in sync with solution.py by hand.
-MODEL_COVARIATES = {   # HP["covariates"] = "corr" (default), queue_in_cleaning = True
-    "quick_exterior_cleaning": ["intercept", "exterior_dirt", "queue_length", "staff = 2", "staff = 3", "van"],
-    "normal_exterior_cleaning": ["intercept", "exterior_dirt", "queue_length", "van", "rain"],
-    "special_cleaning": ["intercept", "smoking_reported", "premium"],
-    "interior_cleaning": ["intercept", "interior_dirt", "child_seat", "queue_length", "rental_days",
-                          "km_driven / 100", "staff = 3"],
-    "damage_check": ["intercept", "damage_reported"],
-    "refuel": ["intercept", "staff = 2", "staff = 3", "suv", "van"],
-    "electric_charging": ["intercept", "battery_soc_pct"],
-    "quick_damage_repair": ["intercept", "damage_reported"],
-    "tyre_check": ["intercept", "staff = 3"],
-}
+MODEL_COVARIATES = None   # filled from starter/solution.py (COVARIATES / covariate_names) in _model_covariates()
+
+
+def _model_covariates():
+    sol = _load_solution()
+    return sol.covariate_names(dict(sol.HP))
 CANDIDATE_COVARIATES = ["intercept", "interior_dirt", "exterior_dirt", "child_seat", "pet", "smoking_reported",
                         "damage_reported", "fuel_level_pct", "battery_soc_pct", "km_driven / 100", "rental_days",
                         "van", "suv", "premium", "powertrain", "rain", "queue_length", "staff = 2", "staff = 3",
@@ -383,7 +377,7 @@ CANDIDATE_COVARIATES = ["intercept", "interior_dirt", "exterior_dirt", "child_se
 def fig7_model_covariates(tr):
     """Which covariates enter which per-task regression (orange = used), with the fitted coefficient in each box.
 
-    Coefficients come from analysis/data/model_coefficients.json (written by analysis/fit_coefficients.py);
+    Coefficients come from plots/data/model_coefficients.json (written by plots/fit_coefficients.py);
     without that file the boxes are drawn without values.
     """
     import json
@@ -392,6 +386,7 @@ def fig7_model_covariates(tr):
     coef_file = Path(__file__).resolve().parent / "data" / "model_coefficients.json"
     coefs = json.loads(coef_file.read_text()) if coef_file.exists() else {}
     rows, cols = TASKS, CANDIDATE_COVARIATES
+    MODEL_COVARIATES = _model_covariates()
     M = np.array([[c in MODEL_COVARIATES[t] for c in cols] for t in rows], float)
     fig, ax = plt.subplots(figsize=(13, 5.8))
     ax.imshow(M, cmap=ListedColormap(["#f0efec", used_c]), aspect="auto", vmin=0, vmax=1)
@@ -428,6 +423,7 @@ def fig8_covariate_correlation(lab, va):
     Numeric / yes-no covariates: Pearson r (signed). Categorical covariates: correlation ratio eta (0..1, unsigned).
     Same rows and columns as plot 7 (intercept dropped).
     """
+    MODEL_COVARIATES = _model_covariates()
     from matplotlib.colors import LinearSegmentedColormap
     staff = va.branch.str.split("_").str[1].map({"AIRPORT": 3, "STATION": 2, "CENTER": 1})
     numeric = {"interior_dirt": va.interior_dirt, "exterior_dirt": va.exterior_dirt, "child_seat": va.child_seat,
@@ -509,7 +505,7 @@ def fig9_effects_check(lab, va):
     here = Path(__file__).resolve().parent
     coef_file = here / "data" / "model_coefficients.json"
     if not coef_file.exists():
-        print("fig9 skipped: run analysis/fit_coefficients.py first"); return
+        print("fig9 skipped: run plots/fit_coefficients.py first"); return
     fitted = json.loads(coef_file.read_text())
     spec = importlib.util.spec_from_file_location("solution", ROOT / "starter" / "solution.py")
     sol = importlib.util.module_from_spec(spec); spec.loader.exec_module(sol)
@@ -522,7 +518,7 @@ def fig9_effects_check(lab, va):
         names = list(fitted[t])
         if X[t].shape[1] != len(names):
             print(f"fig9 skipped: {t} has {X[t].shape[1]} columns in solution.py but {len(names)} saved coefficients "
-                  "- rerun analysis/fit_coefficients.py"); return
+                  "- rerun plots/fit_coefficients.py"); return
         m = (va[t] == 1).values
         true_coef = np.linalg.lstsq(X[t][m], lab.loc[m, t].values, rcond=None)[0]
         for j, n in enumerate(names):
@@ -585,7 +581,9 @@ def _validation_parts(lab, va, sol, total, dur):
 
 
 def fig10_total_breakdown(lab, va):
-    """What makes the total long? Mean total split into work, waiting while open and closed time, true vs model."""
+    """What makes the total long? Mean total split into work, waiting while open and closed time, true vs model.
+    true = validation labels; model = starter/pred_merged.csv. Work = busiest worker (or charging); waiting = open
+    minutes not explained by work; closed = minutes the branch was shut."""
     sol = _load_solution()
     pred_file = ROOT / "starter" / "pred_merged.csv"
     sources = [("true", lab.total_turnaround_min.values, lab[TASKS].values.astype(float))]
@@ -600,31 +598,53 @@ def fig10_total_breakdown(lab, va):
         for g in groups:
             m = sit == g
             parts[(g, name)] = (work[m].mean(), wait[m].mean(), closed[m].mean(), m.sum())
-    comps = [("work on the car", ORANGE), ("waiting while open", INK2), ("branch closed", "#c3c2b7")]
-    fig, axes = plt.subplots(1, 3, figsize=(13, 5.2), gridspec_kw=dict(width_ratios=[1, 1, 1]))
+    comps = [("work on tasks", ORANGE), ("waiting while open", INK2), ("branch closed", "#c3c2b7")]
+    fig, axes = plt.subplots(1, 3, figsize=(13, 5))
     for ax, g in zip(axes, groups):
         names = [n for n, *_ in sources]
         for xi, n in enumerate(names):
-            vals = parts[(g, n)][:3]
             bottom = 0
-            for (lbl, c), v in zip(comps, vals):
+            for (lbl, c), v in zip(comps, parts[(g, n)][:3]):
                 ax.bar(xi, v, bottom=bottom, color=c, width=0.6, edgecolor=SURFACE, linewidth=1.5)
                 bottom += v
-            ax.text(xi, bottom, f"{bottom:,.0f} min", ha="center", va="bottom", fontsize=9, color=INK)
-        ax.set_xticks(range(len(names)), names)
-        ax.set_title(f"{g}\n(n = {parts[(g, 'true')][3]:,})", fontsize=10)
+            ax.text(xi, bottom, f"{bottom:,.0f} min", ha="center", va="bottom", fontsize=13, color=INK, fontweight="bold")
+        ax.set_xticks(range(len(names)), names, fontsize=13)
+        ax.set_title(f"{g}\n(n = {parts[(g, 'true')][3]:,})", fontsize=13)
         ax.set_ylim(0, max(sum(parts[(g, n)][:3]) for n in names) * 1.15)
-        ax.grid(axis="x", visible=False)
-    axes[0].set_ylabel("average minutes from return to ready")
+        ax.set_yticks([]); ax.grid(False)
+        for sp in ("left", "top", "right"):
+            ax.spines[sp].set_visible(False)
     handles = [plt.Rectangle((0, 0), 1, 1, color=c) for _, c in comps]
-    fig.legend(handles, [l for l, _ in comps], frameon=False, loc="upper right", ncol=3, fontsize=9)
-    fig.suptitle("What makes the total long: waiting and closed hours, not the work (validation week)",
-                 x=0.01, ha="left", fontsize=12, fontweight="bold")
-    fig.text(0.01, 0.01, "true = validation labels; model = starter/pred_merged.csv. Work = time of the busiest worker "
-             "(or charging); waiting = open minutes not explained by work;\n"
-             "closed = minutes the branch was shut. Note the different y-axis per panel.", fontsize=8, color=GREY)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.94)); fig.savefig(OUT / "10_total_breakdown.png", dpi=150); plt.close(fig)
+    fig.legend(handles, [l for l, _ in comps], frameon=False, loc="lower center", ncol=3, fontsize=13)
+    fig.tight_layout(rect=(0, 0.08, 1, 1)); fig.savefig(OUT / "10_total_breakdown.png", dpi=150); plt.close(fig)
 
+def fig11_task_durations_estimated(lab, va):
+    """Estimated vs true average duration per task on the validation week (cars where the task was done), with MAE."""
+    pred_file = ROOT / "starter" / "pred_merged.csv"
+    if not pred_file.exists():
+        print("fig11 skipped: no starter/pred_merged.csv"); return
+    pr = pd.read_csv(pred_file)
+    rows = []
+    for t in TASKS:
+        m = (va[t] == 1).values
+        true, est = lab.loc[m, t].values, pr.loc[m, f"dur_{t}"].values
+        rows.append((t, true.mean(), est.mean(), np.abs(est - true).mean(), m.sum()))
+    fig, ax = plt.subplots(figsize=(8, 6))
+    y = np.arange(len(rows))[::-1]
+    h = 0.38
+    ax.barh(y + h / 2, [r[1] for r in rows], height=h, color="#a9a8a0", label="true")
+    ax.barh(y - h / 2, [r[2] for r in rows], height=h, color=ORANGE, label="estimated")
+    for yi, (t, tr_, es, mae, n) in zip(y, rows):
+        ax.text(max(tr_, es) + 1, yi, f"MAE {mae:.1f}", va="center", fontsize=10, color=INK2)
+    ax.set_yticks(y, [f"{SHORT[t]} ({n:,})" for t, *_, n in rows], fontsize=11)
+    ax.set_xlabel("average task duration (minutes)", fontsize=11)
+    ax.set_xlim(0, max(max(r[1], r[2]) for r in rows) * 1.22)
+    ax.grid(axis="y", visible=False)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.legend(frameon=False, loc="lower right", fontsize=10)
+    ax.set_title("Estimated vs true duration per task (validation week)", fontsize=12, fontweight="bold", loc="left")
+    fig.tight_layout(); fig.savefig(OUT / "11_task_durations_estimated.png", dpi=150); plt.close(fig)
 
 def summary_table(tr):
     rows = []
@@ -660,5 +680,6 @@ if __name__ == "__main__":
     fig8_covariate_correlation(lab, va)
     fig9_effects_check(lab, va)
     fig10_total_breakdown(lab, va)
+    fig11_task_durations_estimated(lab, va)
     print(summary_table(tr).to_string(index=False))
     print(f"figures written to {OUT}")

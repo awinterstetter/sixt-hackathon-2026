@@ -34,7 +34,7 @@
       vertical-align: middle;
     }
   </style>
-  <link rel="stylesheet" href="slides_files/libs/revealjs/dist/theme/quarto-5589c53fe732f4a2906b5914f20b7979.css">
+  <link rel="stylesheet" href="slides_files/libs/revealjs/dist/theme/quarto-324736391338976ffe3a2790719c9ed4.css">
   <link href="slides_files/libs/revealjs/plugin/quarto-line-highlight/line-highlight.css" rel="stylesheet">
   <link href="slides_files/libs/revealjs/plugin/reveal-menu/menu.css" rel="stylesheet">
   <link href="slides_files/libs/revealjs/plugin/reveal-menu/quarto-menu.css" rel="stylesheet">
@@ -284,8 +284,31 @@
 <p><span class="knum">3.87 min</span></p>
 </div>
 </div>
+<div class="figs2b">
+<p><img data-src="figures/11_task_durations_estimated.png"></p>
+<p><img data-src="figures/10_total_breakdown.png"></p>
+</div>
 <aside class="notes">
 <p>On the full validation week the total error is 13.6 minutes and the per-task weighted error is 0.14. Common tasks are within about two minutes; normal exterior is underestimated by a few minutes, and the rare repair and tyre check carry the largest errors. Most effects are believable: child seat, smoking, reported damage, missing battery, and airports refuelling more but checking tyres less. Two are not: vans faster on normal exterior, and damage check too long when damage is reported. Even with the true task times our process rule leaves about 13 minutes of total error, so the remaining error is waiting.</p>
+<style type="text/css">
+        span.MJX_Assistive_MathML {
+          position:absolute!important;
+          clip: rect(1px, 1px, 1px, 1px);
+          padding: 1px 0 0 0!important;
+          border: 0!important;
+          height: 1px!important;
+          width: 1px!important;
+          overflow: hidden!important;
+          display:block!important;
+      }</style></aside>
+</section>
+<section id="fitted-coefficients" class="slide level2 ht">
+<h2>Fitted coefficients</h2>
+<p><span class="eyebrow">04 · Results · coefficients</span></p>
+<p><span class="h2">Fitted effects per task, in minutes</span></p>
+
+<img data-src="figures/07_per_task_model_covariates.png" class="fullfig r-stretch"><aside class="notes">
+<p>Each row is one task formula. The first column is the base time in minutes; the other orange cells are the minutes a covariate adds, for example child seat plus six minutes on interior, damage reported plus twenty minutes on repair, tyre check twelve minutes shorter at airports. Grey cells are covariates that did not pass the Bonferroni rule for that task.</p>
 <style type="text/css">
         span.MJX_Assistive_MathML {
           position:absolute!important;

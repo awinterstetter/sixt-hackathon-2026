@@ -170,41 +170,55 @@ class _Data:
                                 / self.staff[i])
 
 
+# covariates per task (first = intercept). "corr" (default): a covariate is used if |r| >= 0.1 and p < 0.05 / 199
+# (Bonferroni over all 199 task x variable tests) against the task's true duration on validation (tasks performed only).
+# Branch type = staff level here (airport 3, station 2, center 1), so it enters as "staff = 2" / "staff = 3".
+COVARIATES = {
+    "base": {
+        "quick_exterior_cleaning": ["intercept", "exterior_dirt", "queue_length", "staff = 2", "staff = 3"],
+        "normal_exterior_cleaning": ["intercept", "exterior_dirt", "queue_length"],
+        "special_cleaning": ["intercept", "smoking_reported"],
+        "interior_cleaning": ["intercept", "interior_dirt", "child_seat", "queue_length"],
+        "damage_check": ["intercept"],
+        "refuel": ["intercept", "staff = 2", "staff = 3"],
+        "electric_charging": ["intercept", "battery_soc_pct"],
+        "quick_damage_repair": ["intercept", "damage_reported"],
+        "tyre_check": ["intercept"],
+    },
+    "corr": {
+        "quick_exterior_cleaning": ["intercept", "exterior_dirt", "queue_length", "staff = 2", "staff = 3", "van"],
+        "normal_exterior_cleaning": ["intercept", "exterior_dirt", "queue_length", "van", "rain"],
+        "special_cleaning": ["intercept", "smoking_reported", "premium"],
+        "interior_cleaning": ["intercept", "interior_dirt", "child_seat", "queue_length", "rental_days",
+                              "km_driven / 100", "staff = 3"],
+        "damage_check": ["intercept", "damage_reported"],
+        "refuel": ["intercept", "staff = 2", "staff = 3", "suv", "van"],
+        "electric_charging": ["intercept", "battery_soc_pct"],
+        "quick_damage_repair": ["intercept", "damage_reported"],
+        "tyre_check": ["intercept", "staff = 3"],
+    },
+}
+
+
+def covariate_names(hp):
+    """Covariate names per task, in the column order of _design (queue_length only if queue_in_cleaning)."""
+    return {t: [c for c in v if c != "queue_length" or hp["queue_in_cleaning"]]
+            for t, v in COVARIATES[hp["covariates"]].items()}
+
+
 def _design(df, staff, hp):
-    """Driver columns per task (first column = intercept).
-    "corr": a driver is used if |r| >= 0.1 and p < 0.05 / 199 (Bonferroni over all 199 task x variable tests) between
-    it and the task's true duration on validation (tasks performed only). Branch type = staff level here (airport 3, station 2, center 1), so it enters as s2/s3."""
-    one, soc = np.ones(len(df)), df.battery_soc_pct.fillna(50).values
-    q = [df.queue_length] if hp["queue_in_cleaning"] else []
-    s2, s3 = staff == 2, staff == 3
+    """Covariate columns per task, built from covariate_names(hp)."""
     vc = df.vehicle_class.values
-    van, suv, premium = vc == "van", vc == "suv", vc == "premium"
-    rain = (df.weather == "rain").values
-    if hp["covariates"] == "base":
-        cols = {
-            "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3],
-            "normal_exterior_cleaning": [one, df.exterior_dirt, *q],
-            "special_cleaning": [one, df.smoking_reported],
-            "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q],
-            "damage_check": [one],
-            "refuel": [one, s2, s3],
-            "electric_charging": [one, 100 - soc],
-            "quick_damage_repair": [one, df.damage_reported],
-            "tyre_check": [one],
-        }
-    else:
-        cols = {
-            "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3, van],
-            "normal_exterior_cleaning": [one, df.exterior_dirt, *q, van, rain],
-            "special_cleaning": [one, df.smoking_reported, premium],
-            "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q, df.rental_days, df.km_driven / 100, s3],
-            "damage_check": [one, df.damage_reported],
-            "refuel": [one, s2, s3, suv, van],
-            "electric_charging": [one, 100 - soc],
-            "quick_damage_repair": [one, df.damage_reported],
-            "tyre_check": [one, s3],
-        }
-    return {t: np.column_stack([np.asarray(c, dtype=float) for c in v]) for t, v in cols.items()}
+    col = {
+        "intercept": np.ones(len(df)), "exterior_dirt": df.exterior_dirt, "interior_dirt": df.interior_dirt,
+        "queue_length": df.queue_length, "child_seat": df.child_seat, "smoking_reported": df.smoking_reported,
+        "damage_reported": df.damage_reported, "rental_days": df.rental_days, "km_driven / 100": df.km_driven / 100,
+        "battery_soc_pct": 100 - df.battery_soc_pct.fillna(50).values,      # enters as % battery missing
+        "staff = 2": staff == 2, "staff = 3": staff == 3,
+        "van": vc == "van", "suv": vc == "suv", "premium": vc == "premium", "rain": (df.weather == "rain").values,
+    }
+    return {t: np.column_stack([np.asarray(col[c], dtype=float) for c in names])
+            for t, names in covariate_names(hp).items()}
 
 
 # ---------------------------------------------------------------- process model
@@ -473,6 +487,13 @@ def fit(train, branches, hp=None):
     data, theta, sl = _fit_durations(train, branches, staff_map, hp)
     return {"hp": hp, "theta": theta, "slices": sl, "staff": staff_map.to_dict(),
             "wait_model": _fit_wait(data, theta, sl, hp)}
+
+
+def coefficient_table(model):
+    """Fitted task coefficients as a table: task, covariate, coefficient (minutes per unit; intercept = base minutes)."""
+    names = covariate_names(model["hp"])
+    return pd.DataFrame([(t, c, float(b)) for t in TASKS for c, b in zip(names[t], model["theta"][model["slices"][t]])],
+                        columns=["task", "covariate", "coefficient"])
 
 
 def predict(model, df, branches):

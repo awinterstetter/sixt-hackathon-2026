@@ -1,43 +1,54 @@
 {
   "quick_exterior_cleaning": {
-    "intercept": 4.786004271347404,
-    "exterior_dirt": 0.549407100872132,
-    "queue_length": -0.05377171616134395,
-    "staff = 2": 3.7381017805441017,
-    "staff = 3": -0.6188594393018476
+    "intercept": 9.514077944479089,
+    "exterior_dirt": 0.1777655522066689,
+    "queue_length": 0.15850670773611164,
+    "staff = 2": -0.3026054040519109,
+    "staff = 3": 3.5223928721622375,
+    "van": -2.493887426948017
   },
   "normal_exterior_cleaning": {
-    "intercept": 10.888655494705667,
-    "exterior_dirt": 2.4066348096253014,
-    "queue_length": -0.8710539635017694
+    "intercept": 13.41760338319638,
+    "exterior_dirt": 0.9219356079743405,
+    "queue_length": 0.12964259914726545,
+    "van": -8.79561835479546,
+    "rain": -0.19169788616864336
   },
   "special_cleaning": {
-    "intercept": 29.482749316446238,
-    "smoking_reported": 7.59989620254436
+    "intercept": 26.928788744764383,
+    "smoking_reported": 3.5895545379338323,
+    "premium": 2.632962378444821
   },
   "interior_cleaning": {
-    "intercept": 10.661709661668507,
-    "interior_dirt": 1.6901746198390846,
-    "child_seat": 7.571337423010692,
-    "queue_length": 0.18476856123532925
+    "intercept": 10.142329478760779,
+    "interior_dirt": 1.288930705002338,
+    "child_seat": 5.978278651892447,
+    "queue_length": 0.15270175957260493,
+    "rental_days": 0.11831725794276741,
+    "km_driven / 100": 0.05496315915379479,
+    "staff = 3": 0.6149620349574298
   },
   "damage_check": {
-    "intercept": 3.040182813043664
+    "intercept": 2.5530277339909087,
+    "damage_reported": 3.4910383887875653
   },
   "refuel": {
-    "intercept": 6.7607435947613705,
-    "staff = 2": 6.850919118424818,
-    "staff = 3": -0.4134863661925086
+    "intercept": 6.2931219805879115,
+    "staff = 2": 2.17670464701305,
+    "staff = 3": 5.912751614286374,
+    "suv": 0.06564105765824045,
+    "van": 6.345811588081142
   },
   "electric_charging": {
-    "intercept": 7.01113054794893,
-    "battery_soc_pct": 0.3006070632732288
+    "intercept": 2.8948928950012385,
+    "battery_soc_pct": 0.34210379379251926
   },
   "quick_damage_repair": {
-    "intercept": 59.05910913057908,
-    "damage_reported": 23.70034157921736
+    "intercept": 49.4820997186432,
+    "damage_reported": 20.47489366281289
   },
   "tyre_check": {
-    "intercept": 21.23111634127144
+    "intercept": 31.312907048973955,
+    "staff = 3": -12.258923434259284
   }
 }
