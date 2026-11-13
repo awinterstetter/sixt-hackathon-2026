@@ -143,9 +143,18 @@ class _Data:
         return self._per_branch(f)
 
     def overnight(self, work):
-        """Predicted work of cars dropped off while the branch was closed, waiting at the same opening, per staff."""
-        return self._per_branch(lambda b, i: pd.Series(work[i] * self.closed_return[i]).groupby(self.interval[i])
-                                .transform("sum").values / self.staff[i])
+        """Predicted work of the drop-offs (cars returned while closed) ahead of this car at the same opening, per staff.
+
+        Drop-offs pile up until the next opening and are then worked through in drop-off order, so a car dropped off
+        while closed only waits for the drop-offs before it; a car returned while open has the whole pile ahead of it.
+        """
+        def f(b, i):
+            closed = self.closed_return[i]
+            w = pd.Series(work[i] * closed)
+            g = w.groupby(self.interval[i])                    # rows of i are in return order
+            before = g.cumsum().values - w.values              # drop-offs earlier the same night
+            return np.where(closed, before, g.transform("sum").values) / self.staff[i]
+        return self._per_branch(f)
 
     def daily_load(self, work):
         """Predicted work of all cars belonging to the same opening day at the branch, per staff."""
