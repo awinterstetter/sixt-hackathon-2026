@@ -21,7 +21,7 @@ import itertools
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import lsq_linear, minimize, minimize_scalar
+from scipy.optimize import minimize, minimize_scalar
 
 TASKS = ["quick_exterior_cleaning", "normal_exterior_cleaning", "special_cleaning", "interior_cleaning",
          "damage_check", "refuel", "electric_charging", "quick_damage_repair", "tyre_check"]
@@ -55,8 +55,6 @@ HP = {
     "w_init": (10.0, 0.0, 0.0, 0.1, 0.1, 0.1),   # waiting level per staff level (1, 2, 3), then backlog slope
     # drivers and plausibility
     "queue_in_cleaning": True, # queue_length as a driver of the three cleaning tasks
-    "qe_staff": True,          # staff dummies (branch type) as drivers of quick exterior cleaning
-    "sign_constrained": False, # effects keep the sign of their correlation with the task duration
     "covariates": "corr",      # "corr": drivers selected by correlation with task duration; "base": original set
     "min_dur": 0.5,            # shortest duration a performed task can get (minutes)
     "seed": 42,
@@ -105,7 +103,7 @@ class _Data:
         self.staff = df.branch.map(staff_map).values.astype(int)
         self.flags = df[TASKS].values.astype(float)
         self.y = df.total_turnaround_min.values.astype(float) if "total_turnaround_min" in df else None
-        self.X, self.signs = _design(df, self.staff, hp)
+        self.X = _design(df, self.staff, hp)
         branch = df.branch.values
         self.groups = [(b, i[np.argsort(self.tmin[i], kind="stable")])
                        for b in pd.unique(branch) for i in [np.where(branch == b)[0]]]
@@ -185,28 +183,19 @@ def _design(df, staff, hp):
             "quick_damage_repair": [one, df.damage_reported],
             "tyre_check": [one],
         }
-        signs = {t: [0] * len(v) for t, v in cols.items()}
     else:
-        qs = [(c, 1) for c in q]                                          # (column, sign of its correlation)
-        qe_staff = [(s2, -1), (s3, 1)] if hp["qe_staff"] else []
-        pairs = {
-            "quick_exterior_cleaning": [(one, 0), (df.exterior_dirt, 1), *qs, *qe_staff, (van, 1)],
-            "normal_exterior_cleaning": [(one, 0), (df.exterior_dirt, 1), *qs, (van, 1), (rain, 1)],
-            "special_cleaning": [(one, 0), (df.smoking_reported, 1), (premium, 1)],
-            "interior_cleaning": [(one, 0), (df.interior_dirt, 1), (df.child_seat, 1), *qs, (df.rental_days, 1),
-                                  (df.km_driven / 100, 1), (s3, 1)],
-            "damage_check": [(one, 0), (df.damage_reported, 1)],
-            "refuel": [(one, 0), (s2, -1), (s3, 1), (suv, 1), (van, 1)],
-            "electric_charging": [(one, 0), (100 - soc, 1)],
-            "quick_damage_repair": [(one, 0), (df.damage_reported, 1)],
-            "tyre_check": [(one, 0), (s3, -1)],
+        cols = {
+            "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3, van],
+            "normal_exterior_cleaning": [one, df.exterior_dirt, *q, van, rain],
+            "special_cleaning": [one, df.smoking_reported, premium],
+            "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q, df.rental_days, df.km_driven / 100, s3],
+            "damage_check": [one, df.damage_reported],
+            "refuel": [one, s2, s3, suv, van],
+            "electric_charging": [one, 100 - soc],
+            "quick_damage_repair": [one, df.damage_reported],
+            "tyre_check": [one, s3],
         }
-        cols = {t: [c for c, _ in v] for t, v in pairs.items()}
-        signs = {t: [g for _, g in v] for t, v in pairs.items()}
-    if not hp["sign_constrained"]:
-        signs = {t: [0] * len(v) for t, v in cols.items()}
-    return ({t: np.column_stack([np.asarray(c, dtype=float) for c in v]) for t, v in cols.items()},
-            {t: np.array(v, float) for t, v in signs.items()})
+    return {t: np.column_stack([np.asarray(c, dtype=float) for c in v]) for t, v in cols.items()}
 
 
 # ---------------------------------------------------------------- process model
@@ -218,17 +207,7 @@ def _assignments(k):
     return (np.array(ways)[:, :, None] == np.arange(k)).astype(float)
 
 
-def _signed(data, theta, sl):
-    """Effects with a sign constraint keep the sign of their correlation (|coefficient| times that sign)."""
-    th = theta.copy()
-    for t in TASKS:
-        g = data.signs[t]
-        th[sl[t]] = np.where(g != 0, g * np.abs(th[sl[t]]), th[sl[t]])
-    return th
-
-
 def _durations(data, theta, sl):
-    theta = _signed(data, theta, sl)
     return np.column_stack([np.clip(data.X[t] @ theta[sl[t]], data.hp["min_dur"], None) * data.flags[:, TI[t]]
                             for t in TASKS])
 
@@ -311,8 +290,6 @@ def _fit_durations(train, branches, staff_map, hp):
 
     # 3. EM on the critical path: reconstruct each car's task durations, refit each task on its own drivers
     theta = _struct_em(data, theta, sl, hp)
-
-    # no second structural fit: it only sees the total and shifts time between tasks the total cannot separate
     return data, theta, sl
 
 
@@ -408,12 +385,7 @@ def _struct_em(data, theta, sl, hp):
         d_hat = np.clip(d_hat, hp["min_dur"], None) * F
         for t in TASKS:                                           # M-step: one regression per task
             m = F[:, TI[t]]
-            g = data.signs[t]
-            if g.any():                                           # least squares with the sign constraints as bounds
-                th[sl[t]] = lsq_linear(data.X[t][m], d_hat[m, TI[t]],
-                                       bounds=(np.where(g > 0, 0, -np.inf), np.where(g < 0, 0, np.inf))).x
-            else:
-                th[sl[t]] = np.linalg.lstsq(data.X[t][m], d_hat[m, TI[t]], rcond=1e-6)[0]
+            th[sl[t]] = np.linalg.lstsq(data.X[t][m], d_hat[m, TI[t]], rcond=1e-6)[0]
             c = crit[m, TI[t]]
             res = d_hat[m, TI[t]][c] - data.X[t][m][c] @ th[sl[t]] if c.sum() > 10 else np.array([3.0])
             sig2[TI[t]] = max(float(np.mean(res ** 2)), 0.25)
@@ -490,7 +462,6 @@ def fit(train, branches, hp=None):
     hp = {**HP, **(hp or {})}
     staff_map = branches.groupby("branch").staff_on_duty.first()
     data, theta, sl = _fit_durations(train, branches, staff_map, hp)
-    theta = _signed(data, theta, sl)                              # store the effects as used
     return {"hp": hp, "theta": theta, "slices": sl, "staff": staff_map.to_dict(),
             "wait_model": _fit_wait(data, theta, sl, hp)}
 
