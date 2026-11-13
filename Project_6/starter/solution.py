@@ -20,7 +20,7 @@ import itertools
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
+from scipy.optimize import minimize, minimize_scalar
 
 TASKS = ["quick_exterior_cleaning", "normal_exterior_cleaning", "special_cleaning", "interior_cleaning",
          "damage_check", "refuel", "electric_charging", "quick_damage_repair", "tyre_check"]
@@ -39,20 +39,22 @@ HP = {
     "morning_cap": 240,        # minutes since opening after which the time-of-day feature stops growing
     "daily_features": True,    # add daily load, work so far today, hour and weekday to the linear waiting model
     # starting values
+    "start": "median_diff",    # "median_diff": median total with vs without each task; "quantile": quantile regression
     "tau": 0.2,                # quantile for the starting-value regression
     "clean_to_close": 240,     # starting values use 1-staff cars returned at least this many minutes before closing
     # structural fit
     "n_sub": 8000,             # cars in the Powell sample
     "maxfev": 12000,           # Powell function-evaluation budget (first structural fit)
     "maxfev_final": 6000,      # Powell budget for the final structural fit after EM
+    "optimizer": "powell",     # "powell": scipy Powell (default); "coordinate": one parameter at a time (tested: worse)
     # EM on the critical path
     "em_iters": 30,            # EM rounds (0 = no EM)
-    "frozen": ("refuel", "quick_damage_repair", "tyre_check"),   # kept at their EM values in the final fit
     "xtol": 1e-3,
     "ftol": 1e-5,
     "w_init": (10.0, 0.0, 0.0, 0.1, 0.1, 0.1),   # waiting level per staff level (1, 2, 3), then backlog slope
     # drivers and plausibility
     "queue_in_cleaning": True, # queue_length as a driver of the three cleaning tasks
+    "covariates": "corr",      # "corr": drivers selected by correlation with task duration; "base": original set
     "min_dur": 0.5,            # shortest duration a performed task can get (minutes)
     "seed": 42,
 }
@@ -159,20 +161,39 @@ class _Data:
 
 
 def _design(df, staff, hp):
-    """Driver columns per task (first column = intercept)."""
+    """Driver columns per task (first column = intercept).
+    "corr": a driver is used if |r| >= 0.1 and p < 0.05 between it and the task's true duration on validation
+    (tasks performed only). Branch type = staff level here (airport 3, station 2, center 1), so it enters as s2/s3."""
     one, soc = np.ones(len(df)), df.battery_soc_pct.fillna(50).values
     q = [df.queue_length] if hp["queue_in_cleaning"] else []
-    cols = {
-        "quick_exterior_cleaning": [one, df.exterior_dirt, *q, staff == 2, staff == 3],
-        "normal_exterior_cleaning": [one, df.exterior_dirt, *q],
-        "special_cleaning": [one, df.smoking_reported],
-        "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q],
-        "damage_check": [one],
-        "refuel": [one, staff == 2, staff == 3],
-        "electric_charging": [one, 100 - soc],
-        "quick_damage_repair": [one, df.damage_reported],
-        "tyre_check": [one],
-    }
+    s2, s3 = staff == 2, staff == 3
+    vc = df.vehicle_class.values
+    van, suv, premium = vc == "van", vc == "suv", vc == "premium"
+    rain, weekend = (df.weather == "rain").values, (df.weekday >= 5).values
+    if hp["covariates"] == "base":
+        cols = {
+            "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3],
+            "normal_exterior_cleaning": [one, df.exterior_dirt, *q],
+            "special_cleaning": [one, df.smoking_reported],
+            "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q],
+            "damage_check": [one],
+            "refuel": [one, s2, s3],
+            "electric_charging": [one, 100 - soc],
+            "quick_damage_repair": [one, df.damage_reported],
+            "tyre_check": [one],
+        }
+    else:
+        cols = {
+            "quick_exterior_cleaning": [one, df.exterior_dirt, *q, s2, s3, van],
+            "normal_exterior_cleaning": [one, df.exterior_dirt, *q, van, rain],
+            "special_cleaning": [one, df.smoking_reported, df.child_seat, df.pet, premium],
+            "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q, df.rental_days, df.km_driven / 100, s3],
+            "damage_check": [one, df.damage_reported],
+            "refuel": [one, s2, s3, suv, van, rain, weekend],
+            "electric_charging": [one, 100 - soc, weekend],
+            "quick_damage_repair": [one, df.damage_reported, soc],
+            "tyre_check": [one, s3, df.return_hour],
+        }
     return {t: np.column_stack([np.asarray(c, dtype=float) for c in v]) for t, v in cols.items()}
 
 
@@ -253,45 +274,89 @@ def _fit_durations(train, branches, staff_map, hp):
 
     # 1. starting values: quantile regression where total = sum of tasks (1 staff, far from closing)
     clean = (data.staff == 1) & (data.to_close > hp["clean_to_close"])
-    Z = np.column_stack([data.X[t] * data.flags[:, [TI[t]]] for t in TASKS])
-    theta = _quantile_irls(Z[clean], data.y[clean], hp["tau"])
+    if hp["start"] == "median_diff":
+        theta = _median_diff_start(data, clean, sl)
+    else:
+        Z = np.column_stack([data.X[t] * data.flags[:, [TI[t]]] for t in TASKS])
+        theta = _quantile_irls(Z[clean], data.y[clean], hp["tau"])
 
     # 2. structural fit through the full process
     sub = np.sort(np.random.RandomState(hp["seed"]).choice(data.n, min(hp["n_sub"], data.n), replace=False))
     ds = _Data(train.iloc[sub], branches, staff_map, hp, clock=data.clock)
-    theta, w = _powell(data, ds, sub, theta, np.array(hp["w_init"], float), sl, hp, (), hp["maxfev"])
+    theta, w = _powell(data, ds, sub, theta, np.array(hp["w_init"], float), sl, hp, hp["maxfev"])
     if hp["em_iters"] == 0:
         return data, theta, sl
 
     # 3. EM on the critical path: reconstruct each car's task durations, refit each task on its own drivers
     theta = _struct_em(data, theta, sl, hp)
 
-    # 4. final structural fit; tasks rarely on the critical path stay at their EM values
-    theta, _ = _powell(data, ds, sub, theta, w, sl, hp, hp["frozen"], hp["maxfev_final"])
+    # 4. final structural fit, starting from the EM durations
+    theta, _ = _powell(data, ds, sub, theta, w, sl, hp, hp["maxfev_final"])
     return data, theta, sl
 
 
-def _powell(data, ds, sub, theta, w, sl, hp, frozen, maxfev):
+def _median_diff_start(data, clean, sl):
+    """Intuitive starting values on 1-staff cars far from closing: what does each task add to the median total?
+    Interior and quick exterior are on every 'basic' car, so their median total is split half and half.
+    All driver effects start at 0."""
+    F, y = data.flags[clean].astype(bool), data.y[clean]
+    other = [t for t in TASKS if t not in ("interior_cleaning", "quick_exterior_cleaning", "normal_exterior_cleaning")]
+    no_other = ~F[:, [TI[t] for t in other]].any(1)
+    basic = np.median(y[no_other & F[:, TI["quick_exterior_cleaning"]]])
+    basic_normal = np.median(y[no_other & F[:, TI["normal_exterior_cleaning"]]])
+    start = {"interior_cleaning": basic / 2, "quick_exterior_cleaning": basic / 2,
+             "normal_exterior_cleaning": basic / 2 + (basic_normal - basic)}
+    for t in other:
+        start[t] = np.median(y[F[:, TI[t]]]) - np.median(y[~F[:, TI[t]]])
+    theta = np.zeros(sum(s.stop - s.start for s in sl.values()))
+    for t in TASKS:
+        theta[sl[t].start] = max(start[t], 0.5)                    # intercept; slopes stay 0
+    return theta
+
+
+def _powell(data, ds, sub, theta, w, sl, hp, maxfev):
     """Minimise mean |total - predicted total| on the sample ds; waiting = staff level + slope * recent backlog."""
     n_par = len(theta)
     bl = data.backlog(_work(_durations(data, theta, sl), data.staff))[sub]   # backlog from the starting durations
-    free = np.ones(n_par, bool)
-    for t in frozen:
-        free[sl[t]] = False
 
     def unpack(p):
-        th = theta.copy()
-        th[free] = p[:free.sum()]
-        return th, p[free.sum():]
+        return p[:n_par], p[n_par:]
 
     def loss(p):
         th, ww = unpack(p)
         wait = np.clip(ww[ds.staff - 1] + ww[3 + ds.staff - 1] * bl, 0, None)
         return np.abs(ds.finish_total(wait + _work(_durations(ds, th, sl), ds.staff)) - ds.y).mean()
 
-    p = minimize(loss, np.concatenate([theta[free], w]), method="Powell",
-                 options={"maxfev": maxfev, "xtol": hp["xtol"], "ftol": hp["ftol"]}).x
+    x0 = np.concatenate([theta, w])
+    if hp["optimizer"] == "coordinate":
+        p = _coordinate_descent(loss, x0, maxfev, hp["ftol"])
+    else:
+        p = minimize(loss, x0, method="Powell", options={"maxfev": maxfev, "xtol": hp["xtol"], "ftol": hp["ftol"]}).x
     return unpack(p)
+
+
+def _coordinate_descent(f, x0, maxfev, ftol, step=1.0):
+    """Change one parameter at a time: a 1-D search along each axis, sweep after sweep, until a full sweep no longer
+    lowers the error (relative improvement below ftol) or the evaluation budget is used up."""
+    x = np.array(x0, float)
+    fx, n_eval = f(x), 1
+    while n_eval < maxfev:
+        f_start = fx
+        for j in range(len(x)):
+            def along(s, j=j):
+                y = x.copy()
+                y[j] += s
+                return f(y)
+            r = minimize_scalar(along, bracket=(-step, step), method="brent", options={"xtol": 1e-3, "maxiter": 50})
+            n_eval += r.nfev
+            if r.fun < fx:
+                x[j] += r.x
+                fx = r.fun
+            if n_eval >= maxfev:
+                break
+        if f_start - fx <= ftol * max(abs(f_start), 1e-9):
+            break
+    return x
 
 
 def _struct_em(data, theta, sl, hp):
