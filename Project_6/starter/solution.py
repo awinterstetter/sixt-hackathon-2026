@@ -7,12 +7,13 @@
 * Task duration = small linear formula of its drivers (dirt, child seat, battery level, ...).
 * One person works the chains one after another; 2-3 people split them and the car is ready when the busiest finishes.
   Charging runs on its own.
-* W = waiting before work starts: median by staff x work backlog (predicted work of cars returned at the same branch in
-  the previous 60 min, per staff member).
+* W = waiting before work starts: a quantile of the training waits by staff x work backlog (predicted work of cars
+  returned at the same branch in the previous `backlog_window` minutes, per staff member).
 * clock_open counts only minutes while the branch is open (branch_data.csv), so work pauses overnight and on closed days.
 
 Fitting (train.csv only): quantile regression on 1-staff rows far from closing gives starting values; Powell then
-minimises the absolute total error through the full process on a seeded sample; the waiting table is re-estimated last.
+minimises the absolute total error through the full process on a seeded sample; the waiting table is estimated last.
+All settings are hyperparameters in HP; fit(train, branches, hp={...}) overrides them.
 """
 import functools
 import itertools
@@ -23,16 +24,38 @@ from scipy.optimize import minimize
 
 TASKS = ["quick_exterior_cleaning", "normal_exterior_cleaning", "special_cleaning", "interior_cleaning",
          "damage_check", "refuel", "electric_charging", "quick_damage_repair", "tyre_check"]
-SEED = 42
 TI = {t: i for i, t in enumerate(TASKS)}
 CHAINS = [["interior_cleaning", "special_cleaning"], ["damage_check", "quick_damage_repair"],
           ["quick_exterior_cleaning", "normal_exterior_cleaning"], ["refuel"], ["tyre_check"]]
 EPOCH = pd.Timestamp("2025-01-01")
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-BACKLOG_WINDOW = 60   # minutes
-N_BINS = 8            # backlog bins per staff level in the waiting table
-N_SUB = 8000          # cars used in the Powell search
-MIN_DUR = 0.5         # shortest duration a performed task can get (minutes)
+
+HP = {
+    # waiting model
+    "backlog_window": 60,      # minutes of earlier returns that count towards the backlog
+    "wait_model": "linear",    # "linear": median regression per staff level; "table": staff x backlog-bin lookup
+    "n_bins": 8,               # backlog bins per staff level (table model)
+    "wait_quantile": 0.5,      # which quantile of the training waits to predict (0.5 = median)
+    "morning_cap": 240,        # minutes since opening after which the time-of-day feature stops growing
+    "daily_features": True,    # add daily load, work so far today, hour and weekday to the linear waiting model
+    # starting values
+    "tau": 0.2,                # quantile for the starting-value regression
+    "clean_to_close": 240,     # starting values use 1-staff cars returned at least this many minutes before closing
+    # structural fit
+    "n_sub": 8000,             # cars in the Powell sample
+    "maxfev": 12000,           # Powell function-evaluation budget (first structural fit)
+    "maxfev_final": 6000,      # Powell budget for the final structural fit after EM
+    # EM on the critical path
+    "em_iters": 30,            # EM rounds (0 = no EM)
+    "frozen": ("refuel", "quick_damage_repair", "tyre_check"),   # kept at their EM values in the final fit
+    "xtol": 1e-3,
+    "ftol": 1e-5,
+    "w_init": (10.0, 0.0, 0.0, 0.1, 0.1, 0.1),   # waiting level per staff level (1, 2, 3), then backlog slope
+    # drivers and plausibility
+    "queue_in_cleaning": True, # queue_length as a driver of the three cleaning tasks
+    "min_dur": 0.5,            # shortest duration a performed task can get (minutes)
+    "seed": 42,
+}
 
 
 # ---------------------------------------------------------------- opening-hours clock
@@ -69,20 +92,27 @@ def _from_open(clock, b, o):
 class _Data:
     """Numpy view of a turnaround table; rows grouped by branch and sorted by return time."""
 
-    def __init__(self, df, branches, staff_map, clock=None):
+    def __init__(self, df, branches, staff_map, hp, clock=None):
         ts = pd.to_datetime(df.return_ts)
-        self.n = len(df)
+        self.n, self.hp = len(df), hp
         self.clock = clock or _build_clock(branches, ts)
         self.tmin = ((ts - EPOCH) / pd.Timedelta(minutes=1)).values.astype(float)
         self.staff = df.branch.map(staff_map).values.astype(int)
         self.flags = df[TASKS].values.astype(float)
         self.y = df.total_turnaround_min.values.astype(float) if "total_turnaround_min" in df else None
-        self.X = _design(df, self.staff)
+        self.X = _design(df, self.staff, hp)
         branch = df.branch.values
         self.groups = [(b, i[np.argsort(self.tmin[i], kind="stable")])
                        for b in pd.unique(branch) for i in [np.where(branch == b)[0]]]
         self.o0 = self._per_branch(lambda b, i: _to_open(self.clock, b, self.tmin[i]))
         self.to_close = self._per_branch(lambda b, i: self._to_close(b, self.tmin[i]))
+        # opening interval of each car (cars returned while closed belong to the next opening) and open minutes since it began
+        self.interval = self._per_branch(lambda b, i: np.searchsorted(self.clock[b][1], self.tmin[i], side="right"))
+        self.since_open = self._per_branch(lambda b, i: self.o0[i] - self.clock[b][2][self.interval[i].astype(int)])
+        self.closed_return = self.to_close < 0
+        self.weekday = ts.dt.weekday.values
+        self.weekend = (self.weekday >= 5).astype(float)
+        self.hour = ts.dt.hour.values.astype(float)
 
     def _to_close(self, b, t):
         s, e, _, _ = self.clock[b]
@@ -104,21 +134,39 @@ class _Data:
         return self._per_branch(lambda b, i: _to_open(self.clock, b, self.tmin[i] + total[i]) - self.o0[i])
 
     def backlog(self, work):
-        """Predicted work of cars returned at the same branch in the previous BACKLOG_WINDOW minutes, per staff."""
+        """Predicted work of cars returned at the same branch in the previous backlog_window minutes, per staff."""
+        win = self.hp["backlog_window"]
+
         def f(b, i):
             t, cs = self.tmin[i], np.concatenate([[0.0], np.cumsum(work[i])])
-            return (cs[np.searchsorted(t, t, "left")] - cs[np.searchsorted(t, t - BACKLOG_WINDOW, "left")]) / self.staff[i]
+            return (cs[np.searchsorted(t, t, "left")] - cs[np.searchsorted(t, t - win, "left")]) / self.staff[i]
         return self._per_branch(f)
 
+    def overnight(self, work):
+        """Predicted work of cars dropped off while the branch was closed, waiting at the same opening, per staff."""
+        return self._per_branch(lambda b, i: pd.Series(work[i] * self.closed_return[i]).groupby(self.interval[i])
+                                .transform("sum").values / self.staff[i])
 
-def _design(df, staff):
+    def daily_load(self, work):
+        """Predicted work of all cars belonging to the same opening day at the branch, per staff."""
+        return self._per_branch(lambda b, i: pd.Series(work[i]).groupby(self.interval[i]).transform("sum").values
+                                / self.staff[i])
+
+    def work_so_far(self, work):
+        """Predicted work of the earlier cars of the same opening day at the branch, per staff."""
+        return self._per_branch(lambda b, i: (pd.Series(work[i]).groupby(self.interval[i]).cumsum().values - work[i])
+                                / self.staff[i])
+
+
+def _design(df, staff, hp):
     """Driver columns per task (first column = intercept)."""
     one, soc = np.ones(len(df)), df.battery_soc_pct.fillna(50).values
+    q = [df.queue_length] if hp["queue_in_cleaning"] else []
     cols = {
-        "quick_exterior_cleaning": [one, df.exterior_dirt, df.queue_length, staff == 2, staff == 3],
-        "normal_exterior_cleaning": [one, df.exterior_dirt, df.queue_length],
+        "quick_exterior_cleaning": [one, df.exterior_dirt, *q, staff == 2, staff == 3],
+        "normal_exterior_cleaning": [one, df.exterior_dirt, *q],
         "special_cleaning": [one, df.smoking_reported],
-        "interior_cleaning": [one, df.interior_dirt, df.child_seat, df.queue_length],
+        "interior_cleaning": [one, df.interior_dirt, df.child_seat, *q],
         "damage_check": [one],
         "refuel": [one, staff == 2, staff == 3],
         "electric_charging": [one, 100 - soc],
@@ -138,36 +186,52 @@ def _assignments(k):
 
 
 def _durations(data, theta, sl):
-    return np.column_stack([np.clip(data.X[t] @ theta[sl[t]], MIN_DUR, None) * data.flags[:, TI[t]] for t in TASKS])
+    return np.column_stack([np.clip(data.X[t] @ theta[sl[t]], data.hp["min_dur"], None) * data.flags[:, TI[t]]
+                            for t in TASKS])
 
 
-def _work(dur, staff):
-    """Time until the busiest person (or the charger) is done."""
+def _work(dur, staff, critical=False):
+    """Time until the busiest person (or the charger) is done; optionally also which tasks are on the critical path."""
     ch = np.column_stack([sum(dur[:, TI[t]] for t in g) for g in CHAINS])
     mk = np.empty(len(dur))
+    crit_ch = np.zeros((len(dur), len(CHAINS)), bool)
     for k in np.unique(staff):
-        m = staff == k
-        mk[m] = np.einsum("nc,ack->nak", ch[m], _assignments(int(k))).max(2).min(1)
-    return np.maximum(mk, dur[:, TI["electric_charging"]])
+        m = np.where(staff == k)[0]
+        oh = _assignments(int(k))
+        loads = np.einsum("nc,ack->nak", ch[m], oh)
+        best = loads.max(2).argmin(1)
+        mk[m] = loads.max(2)[np.arange(len(m)), best]
+        if critical:   # chains done by the busiest person in the best split
+            crit_ch[m] = oh[best][np.arange(len(m)), :, loads[np.arange(len(m)), best].argmax(1)] > 0
+    charge = dur[:, TI["electric_charging"]]
+    work = np.maximum(mk, charge)
+    if not critical:
+        return work
+    crit = np.zeros_like(dur, bool)
+    for c, g in enumerate(CHAINS):
+        for t in g:
+            crit[:, TI[t]] = crit_ch[:, c] & (charge <= mk)
+    crit[:, TI["electric_charging"]] = charge > mk
+    return work, crit & (dur > 0)
 
 
 # ---------------------------------------------------------------- waiting table
-def _wait_table(staff, backlog, wait):
-    """Median wait by staff x backlog bin (bin edges = quantiles of the training backlog per staff level)."""
-    table = {}
+def _wait_table(staff, backlog, wait, hp):
+    """Quantile of the waits by staff x backlog bin (bin edges = quantiles of the training backlog per staff)."""
+    q, table = hp["wait_quantile"], {}
     for k in np.unique(staff):
         b, w = backlog[staff == k], wait[staff == k]
-        edges = np.unique(np.quantile(b, np.linspace(0, 1, N_BINS + 1)[1:-1]))
+        edges = np.unique(np.quantile(b, np.linspace(0, 1, hp["n_bins"] + 1)[1:-1]))
         bins = np.searchsorted(edges, b, side="right")
-        table[int(k)] = (edges, np.array([np.median(w[bins == j]) if np.any(bins == j) else np.median(w)
+        table[int(k)] = (edges, np.array([np.quantile(w[bins == j] if np.any(bins == j) else w, q)
                                           for j in range(len(edges) + 1)]))
     return table
 
 
 def _wait_predict(staff, backlog, table):
     out = np.zeros(len(staff))
-    for k, (edges, med) in table.items():
-        out[staff == k] = med[np.searchsorted(edges, backlog[staff == k], side="right")]
+    for k, (edges, val) in table.items():
+        out[staff == k] = val[np.searchsorted(edges, backlog[staff == k], side="right")]
     return out
 
 
@@ -181,43 +245,147 @@ def _quantile_irls(X, y, tau, iters=80, eps=1e-2):
     return b
 
 
-def fit(train, branches):
-    staff_map = branches.groupby("branch").staff_on_duty.first()
-    data = _Data(train, branches, staff_map)
+def _fit_durations(train, branches, staff_map, hp):
+    """Steps 1-2: starting values, then the structural fit. Returns the prepared data, parameters and slices."""
+    data = _Data(train, branches, staff_map, hp)
     sizes = [data.X[t].shape[1] for t in TASKS]
     sl = {t: slice(a - k, a) for t, k, a in zip(TASKS, sizes, itertools.accumulate(sizes))}
-    n_par = sum(sizes)
 
-    # 1. starting values: quantile regression where total = sum of tasks (1 staff, > 4 h before closing)
-    clean = (data.staff == 1) & (data.to_close > 240)
+    # 1. starting values: quantile regression where total = sum of tasks (1 staff, far from closing)
+    clean = (data.staff == 1) & (data.to_close > hp["clean_to_close"])
     Z = np.column_stack([data.X[t] * data.flags[:, [TI[t]]] for t in TASKS])
-    theta = _quantile_irls(Z[clean], data.y[clean], 0.2)
+    theta = _quantile_irls(Z[clean], data.y[clean], hp["tau"])
 
-    # 2. structural fit: Powell on a seeded sample; waiting = staff level + slope * backlog (backlog from step 1)
-    backlog = data.backlog(_work(_durations(data, theta, sl), data.staff))
-    sub = np.sort(np.random.RandomState(SEED).choice(data.n, min(N_SUB, data.n), replace=False))
-    ds, bl = _Data(train.iloc[sub], branches, staff_map, clock=data.clock), backlog[sub]
+    # 2. structural fit through the full process
+    sub = np.sort(np.random.RandomState(hp["seed"]).choice(data.n, min(hp["n_sub"], data.n), replace=False))
+    ds = _Data(train.iloc[sub], branches, staff_map, hp, clock=data.clock)
+    theta, w = _powell(data, ds, sub, theta, np.array(hp["w_init"], float), sl, hp, (), hp["maxfev"])
+    if hp["em_iters"] == 0:
+        return data, theta, sl
+
+    # 3. EM on the critical path: reconstruct each car's task durations, refit each task on its own drivers
+    theta = _struct_em(data, theta, sl, hp)
+
+    # 4. final structural fit; tasks rarely on the critical path stay at their EM values
+    theta, _ = _powell(data, ds, sub, theta, w, sl, hp, hp["frozen"], hp["maxfev_final"])
+    return data, theta, sl
+
+
+def _powell(data, ds, sub, theta, w, sl, hp, frozen, maxfev):
+    """Minimise mean |total - predicted total| on the sample ds; waiting = staff level + slope * recent backlog."""
+    n_par = len(theta)
+    bl = data.backlog(_work(_durations(data, theta, sl), data.staff))[sub]   # backlog from the starting durations
+    free = np.ones(n_par, bool)
+    for t in frozen:
+        free[sl[t]] = False
+
+    def unpack(p):
+        th = theta.copy()
+        th[free] = p[:free.sum()]
+        return th, p[free.sum():]
 
     def loss(p):
-        th, w = p[:n_par], p[n_par:]
-        wait = np.clip(w[ds.staff - 1] + w[3 + ds.staff - 1] * bl, 0, None)
+        th, ww = unpack(p)
+        wait = np.clip(ww[ds.staff - 1] + ww[3 + ds.staff - 1] * bl, 0, None)
         return np.abs(ds.finish_total(wait + _work(_durations(ds, th, sl), ds.staff)) - ds.y).mean()
 
-    p = minimize(loss, np.concatenate([theta, [10.0, 0.0, 0.0, 0.1, 0.1, 0.1]]), method="Powell",
-                 options={"maxfev": 12000, "xtol": 1e-3, "ftol": 1e-5}).x
-    theta = p[:n_par]
+    p = minimize(loss, np.concatenate([theta[free], w]), method="Powell",
+                 options={"maxfev": maxfev, "xtol": hp["xtol"], "ftol": hp["ftol"]}).x
+    return unpack(p)
 
-    # 3. waiting table from the final durations
-    work = _work(_durations(data, theta, sl), data.staff)
+
+def _struct_em(data, theta, sl, hp):
+    """EM: per car, share the time the model can't explain among the tasks on the critical path and the waiting time
+    (in proportion to how much each varies), then refit each task's formula on its reconstructed durations."""
+    th = theta.copy()
+    used = data.open_used(data.y)
+    F = data.flags.astype(bool)
+    sig2, s2w = np.full(len(TASKS), 9.0), 100.0
+    wait_coef = None
+    for _ in range(hp["em_iters"]):
+        mu = _durations(data, th, sl)
+        work, crit = _work(mu, data.staff, critical=True)
+        X = _wait_features(data, mu, work, hp)
+        if wait_coef is None:                                     # first round: waiting = what work doesn't explain
+            wait_coef = _fit_wait_linear(data, X, np.clip(used - work, 0, None), hp)
+        w0 = _predict_wait_linear(data, X, wait_coef)
+        gap = used - w0 - work                                    # time the current model can't explain
+        vt = (crit * sig2).sum(1)
+        v = vt + s2w
+        d_hat = mu + np.where(crit, sig2 / v[:, None] * gap[:, None], 0.0)
+        w_hat = w0 + s2w / v * gap
+        neg = w_hat < 0                                           # waiting can't be negative
+        if neg.any():
+            g0 = (used - work)[neg]
+            d_hat[neg] = mu[neg] + np.where(crit[neg], sig2 / np.maximum(vt[neg], 1e-9)[:, None] * g0[:, None], 0.0)
+            w_hat[neg] = 0.0
+        d_hat = np.clip(d_hat, hp["min_dur"], None) * F
+        for t in TASKS:                                           # M-step: one regression per task
+            m = F[:, TI[t]]
+            th[sl[t]] = np.linalg.lstsq(data.X[t][m], d_hat[m, TI[t]], rcond=1e-6)[0]
+            c = crit[m, TI[t]]
+            res = d_hat[m, TI[t]][c] - data.X[t][m][c] @ th[sl[t]] if c.sum() > 10 else np.array([3.0])
+            sig2[TI[t]] = max(float(np.mean(res ** 2)), 0.25)
+        wait_coef = _fit_wait_linear(data, X, w_hat, hp, iters=30)
+        s2w = max(float(np.var(w_hat - w0)), 1.0)
+    return th
+
+
+def _wait_features(data, dur, work, hp):
+    """Waiting drivers: recent backlog, overnight drop-offs still left at this time, time since opening (capped),
+    repair needed, the car's own work, weekend."""
+    left_overnight = np.clip(data.overnight(work) - data.since_open, 0, None)
+    since = np.minimum(data.since_open, hp["morning_cap"]) / 60
+    repair = (dur[:, TI["quick_damage_repair"]] > 0).astype(float)
+    cols = [np.ones(data.n), data.backlog(work), left_overnight, since, repair, work, data.weekend]
+    if hp["daily_features"]:
+        weekday = (data.weekday[:, None] == np.arange(1, 7)).astype(float)    # Tue..Sun vs Monday
+        cols += [data.daily_load(work), data.work_so_far(work), data.hour, *weekday.T]
+    return np.column_stack(cols)
+
+
+def _fit_wait(data, theta, sl, hp):
+    """Step 3: waiting model from the final durations (per staff level, so drivers can act differently)."""
+    dur = _durations(data, theta, sl)
+    work = _work(dur, data.staff)
     wait = np.clip(data.open_used(data.y) - work, 0, None)
-    return {"theta": theta, "slices": sl, "staff": staff_map.to_dict(),
-            "wait_table": _wait_table(data.staff, data.backlog(work), wait)}
+    if hp["wait_model"] == "table":
+        return "table", _wait_table(data.staff, data.backlog(work), wait, hp)
+    return "linear", _fit_wait_linear(data, _wait_features(data, dur, work, hp), wait, hp)
+
+
+def _fit_wait_linear(data, X, wait, hp, iters=80):
+    """One quantile (median) regression of the waiting time per staff level."""
+    return {int(k): _quantile_irls(X[data.staff == k], wait[data.staff == k], hp["wait_quantile"], iters=iters)
+            for k in np.unique(data.staff)}
+
+
+def _predict_wait_linear(data, X, coef):
+    out = np.zeros(data.n)
+    for k, b in coef.items():
+        out[data.staff == k] = np.clip(X[data.staff == k] @ b, 0, None)
+    return out
+
+
+def _wait_apply(data, dur, work, wait_model, hp):
+    kind, m = wait_model
+    if kind == "table":
+        return _wait_predict(data.staff, data.backlog(work), m)
+    return _predict_wait_linear(data, _wait_features(data, dur, work, hp), m)
+
+
+def fit(train, branches, hp=None):
+    hp = {**HP, **(hp or {})}
+    staff_map = branches.groupby("branch").staff_on_duty.first()
+    data, theta, sl = _fit_durations(train, branches, staff_map, hp)
+    return {"hp": hp, "theta": theta, "slices": sl, "staff": staff_map.to_dict(),
+            "wait_model": _fit_wait(data, theta, sl, hp)}
 
 
 def predict(model, df, branches):
-    data = _Data(df, branches, pd.Series(model["staff"]))
+    data = _Data(df, branches, pd.Series(model["staff"]), model["hp"])
     dur = _durations(data, model["theta"], model["slices"])
     work = _work(dur, data.staff)
-    total = data.finish_total(_wait_predict(data.staff, data.backlog(work), model["wait_table"]) + work)
+    total = data.finish_total(_wait_apply(data, dur, work, model["wait_model"], model["hp"]) + work)
     return pd.DataFrame({"turnaround_id": df.turnaround_id.values, "total_turnaround_min": total,
                          **{f"dur_{t}": dur[:, TI[t]] for t in TASKS}})
