@@ -1,0 +1,410 @@
+---
+title: "Task Time Detective"
+subtitle: "lmu-stads"
+format:
+  revealjs:
+    theme: [default, theme.scss]
+    width: 1920
+    height: 1080
+    margin: 0.066
+    center: false
+    slide-level: 2
+    slide-number: c/t
+    footer: "Task Time Detective · lmu-stads"
+    html-math-method: mathjax
+    transition: fade
+title-slide-attributes:
+  data-visibility: hidden
+---
+
+## {.cover background-color="#191919"}
+
+::: {.bar}
+:::
+
+[Task Time Detective]{style="display:block;font-family:Barlow,Arial,sans-serif;font-size:120px;font-weight:800;line-height:0.95;text-transform:uppercase;color:#FFFFFF"}
+
+[lmu-stads]{.sub}
+
+::: {.notes}
+Our solution in one sentence: we rebuild each car’s path from return to ready and choose the task formulas so the rebuilt totals match the real ones. The path has waiting, staff working task chains in parallel, charging on its own, and an opening-hours clock. Each task gets a duration formula that is linear in its covariates; waiting gets its own model per branch type.
+:::
+
+## What the model captures {.ht}
+
+[01 · Modelling]{.eyebrow}
+
+[What shapes the total duration]{.h2}
+
+::: {.msg2}
+::: {.mcard}
+[1 · Several staff work in parallel]{.mtitle}
+
+[Depending on the branch, 1–3 staff work on different task chains at the same time. Tasks are done when the busiest person finishes.]{.small}
+
+```{=html}
+<div class="lanes"><div class="lgrp"><div class="lname"><b>City center</b><br><span>1 staff</span></div><div class="lbars"><div class="lrow"><span class="blk b1" style="width:96px">Interior</span><span class="blk b2" style="width:112px">Special</span><span class="blk b3" style="width:32px">chk</span><span class="blk b4" style="width:176px">Repair</span><span class="blk b5" style="width:80px">Exterior</span><span class="blk b6" style="width:64px">Refuel</span></div><div class="tdone" style="left:560px"><span>tasks done</span></div></div></div><div class="lgrp"><div class="lname"><b>Station</b><br><span>2 staff</span></div><div class="lbars"><div class="lrow"><span class="blk b1" style="width:96px">Interior</span><span class="blk b2" style="width:112px">Special</span><span class="blk b5" style="width:80px">Exterior</span><span class="blk b6" style="width:64px">Refuel</span></div><div class="lrow"><span class="blk b3" style="width:32px">chk</span><span class="blk b4" style="width:176px">Repair</span></div><div class="tdone" style="left:352px"><span>tasks done</span></div></div></div><div class="lgrp"><div class="lname"><b>Airport</b><br><span>3 staff</span></div><div class="lbars"><div class="lrow"><span class="blk b1" style="width:96px">Interior</span><span class="blk b2" style="width:112px">Special</span></div><div class="lrow"><span class="blk b3" style="width:32px">chk</span><span class="blk b4" style="width:176px">Repair</span></div><div class="lrow"><span class="blk b5" style="width:80px">Exterior</span><span class="blk b6" style="width:64px">Refuel</span></div><div class="tdone" style="left:208px"><span>tasks done</span></div></div></div></div>
+```
+
+[Same car, same tasks: 1 person needs the sum, 3 people need only the longest chain.]{.cap}
+:::
+
+::: {.mcard}
+[2 · Queues and closed hours add time]{.mtitle}
+
+[A returned car often waits in a queue behind earlier cars before anyone starts on it. The total also runs on the clock: work pauses when the branch closes, so a car returned late carries the whole night.]{.small}
+
+```{=html}
+<div class="tl">
+  <div class="tlspan"><span>total duration y<sub>i</sub></span></div>
+  <div class="tlbar"><span class="seg qu" style="width:110px">queue</span><span class="seg wk" style="width:150px">work</span><span class="seg cl" style="width:260px">branch closed</span><span class="seg wk" style="width:180px">work</span></div>
+  <div class="tlticks"><span style="left:0">return 21:00</span><span class="lo" style="left:110px">start 21:30</span><span style="left:260px">close 22:00</span><span style="left:520px">open 07:00</span><span class="lo end" style="left:700px">tasks done 07:40</span></div>
+</div>
+```
+
+[Queue: grows with backlog, overnight drop-offs and daily load. Clock: opening hours per branch and weekday (Sundays closed at city centers).]{.cap}
+:::
+:::
+
+::: {.msg2 .arrows}
+[$\Rightarrow\; \mathrm{work}_i(\beta)$: time until all tasks are completed]{.marrow}
+
+[$\Rightarrow\; \mathrm{wait}_i(\gamma)$: waiting time before work on tasks starts]{.marrow}
+:::
+
+::: {.notes}
+Two things decide the total duration besides the task times themselves. First, staff: at a city center one person does every task one after another, so the times add up; at a station two and at an airport three people work on different task chains at the same time, and the car is ready when the busiest person is done. Charging runs on its own. Second, queueing: a car rarely gets attention the moment it is returned; it waits behind the cars already there, and that wait grows with the backlog, overnight drop-offs and the day’s load. Third, opening hours: the total is measured on the clock. If a car comes back shortly before closing, work stops at closing and continues the next morning, so the night counts towards its total. We model this with an opening-hours clock per branch and weekday.
+:::
+
+## How we fit it {.ht}
+
+[02 · Method]{.eyebrow}
+
+[From total durations to task times]{.h2}
+
+::: {.pipe}
+::: {.prow}
+[1]{.pn}
+
+[Structural fit]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[$\displaystyle \min_{\beta,\,\gamma}\; \frac{1}{|S|}\sum_{i \in S} \Big|\, y_i - \big(\mathrm{wait}_i(\gamma) + \mathrm{work}_i(\beta)\big) \Big|$]{.pmath}
+:::
+
+:::
+
+[Powell’s method optimizes β so the rebuilt totals match the observed total durations.]{.ptxt}
+:::
+:::
+
+::: {.prow .em}
+[2]{.pn}
+
+[EM]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[E-step: each task gets its share of the unexplained time]{.flabel}
+
+[$\displaystyle \underbrace{\hat d_{it}}_{\text{new duration}} = \underbrace{\mu_{it}}_{\text{predicted}} + \underbrace{s_{it}}_{\text{share}} \cdot \underbrace{g_i}_{\text{unexplained}}$]{.pmath}
+:::
+
+::: {.pf}
+[M-step: re-estimate each task formula]{.flabel}
+
+[$\displaystyle \beta_t = \arg\min_\beta \sum_i \big(\underbrace{\hat d_{it}}_{\text{new duration}} - \underbrace{x_{it}^\top \beta}_{\text{formula}}\big)^2$]{.pmath}
+:::
+
+:::
+
+[Tasks that vary more get a larger share; after 30 rounds we get the estimated coefficients β.]{.ptxt}
+:::
+:::
+
+::: {.prow}
+[3]{.pn}
+
+[Waiting model]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[$\displaystyle \gamma_k = \arg\min_\gamma \sum_{i:\,k_i=k} \big|\, w_i - z_i^\top \gamma \big|, \qquad w_i = \max\big(0,\; u_i - \mathrm{work}_i(\beta)\big)$]{.pmath}
+:::
+
+:::
+
+[A median regression per branch type predicts the waiting time before work on tasks starts.]{.ptxt}
+:::
+:::
+
+::: {.prow .out}
+[→]{.pn}
+
+[Result]{.h3}
+
+[Coefficients β (single task durations) and γ (waiting time), utilized to estimate the overall time of the car being processed.]{.pres}
+:::
+
+:::
+
+::: {.notes}
+Three steps. First, the structural fit: Powell’s method chooses the task coefficients so the rebuilt totals, waiting plus the time until all tasks are completed, match the observed totals. Second, EM: for each car the unexplained time is shared over the tasks on its critical path and waiting, in proportion to their variance, and each task formula is re-estimated on those durations; thirty rounds give the final task durations. Third, the waiting model: a median regression per branch type on the time that is left after the tasks. The full pipeline with covariate selection and starting values is in the appendix.
+:::
+
+## 13.6 min total MAE · WAPE 0.14 {.ht}
+
+[03 · Results · validation week, 2,791 cars]{.eyebrow}
+
+[Headline numbers]{.h2}
+
+::: {.kpis3}
+::: {.kpi .main}
+[Per-task WAPE]{.klabel}
+
+[0.14]{.knum}
+:::
+
+::: {.kpi}
+[Total MAE]{.klabel}
+
+[13.6 min]{.knum}
+:::
+
+::: {.kpi}
+[Average task MAE]{.klabel}
+
+[3.87 min]{.knum}
+:::
+:::
+
+::: {.notes}
+On the full validation week the total error is 13.6 minutes and the per-task weighted error is 0.14. Common tasks are within about two minutes; normal exterior is underestimated by a few minutes, and the rare repair and tyre check carry the largest errors. Most effects are believable: child seat, smoking, reported damage, missing battery, and airports refuelling more but checking tyres less. Two are not: vans faster on normal exterior, and damage check too long when damage is reported. Even with the true task times our process rule leaves about 13 minutes of total error, so the remaining error is waiting.
+:::
+
+## {.appendix-card background-color="#191919"}
+
+::: {.bar}
+:::
+
+[Appendix]{.apx}
+
+[Formulas and fitting pipeline]{.apxsub}
+
+::: {.notes}
+Everything after this point is backup material: the full objective function and the fitting pipeline with all formulas.
+:::
+
+## Rebuilt totals must match real totals {.ht}
+
+[Appendix A · Objective function]{.eyebrow}
+
+[Rebuilt totals must match real totals]{.h2}
+
+::: {.grid2}
+::: {.comp}
+[1 · Duration of task t for car i]{.flabel}
+
+$$d_{it} = f_{it}\cdot\max\big(0.5,\; x_{it}^\top \beta_t\big)$$
+[Task $t$’s duration, linear in its covariates, at least 0.5 min.]{.small}
+:::
+
+::: {.comp}
+[2 · Time until all tasks are completed]{.flabel}
+
+$$\mathrm{work}_i(\beta) = \max\Big(d_{i,\text{charge}},\; \min_{a \in \mathcal{A}(k_i)} \max_{p} \sum_{c:\,a(c)=p} \sum_{t \in c} d_{it}\Big)$$
+[Best split $a$ of task chains $c$ over staff members $p \le k$; charging in parallel.]{.small}
+:::
+
+::: {.comp}
+[3 · Waiting time before work on tasks starts]{.flabel}
+
+$$\mathrm{wait}_i(\gamma) = \max\big(0,\; z_i^\top \gamma_{k_i}\big)$$
+[One model per staff level $k$: center, station, airport.]{.small}
+:::
+
+::: {.comp}
+[4 · Predicted total duration]{.flabel}
+
+$$\hat y_i = \mathrm{wait}_i(\gamma) + \mathrm{work}_i(\beta)$$
+[Counted in the branch’s opening hours.]{.small}
+:::
+:::
+
+::: {.objbox}
+::: {.objl}
+[5 · Fitting objective: mean absolute error of the total]{.flabel}
+
+$$\min_{\beta,\,\gamma}\; \frac{1}{|S|}\sum_{i \in S} \Big|\, y_i - \big(\mathrm{wait}_i(\gamma) + \mathrm{work}_i(\beta)\big) \Big|$$
+:::
+
+::: {.objr}
+[$y_i$: total duration]{.small}
+
+[$S$: sample of 8,000 training cars]{.small}
+
+[$\mathrm{wait}_i(\gamma)$: simplified in this fit]{.small}
+
+[absolute error: robust to long waits]{.small}
+:::
+:::
+
+::: {.notes}
+We never see task times, only totals, so the objective compares the rebuilt total with the real total. The rebuilt total runs the process forward: task durations from their covariates, the best split of task chains over the staff on duty, charging in parallel, plus waiting, all pushed through the branch’s opening-hours clock. We minimise the mean absolute error over 8,000 seeded training cars; absolute error keeps a few very long waits from dominating. During this fit waiting is a placeholder; it gets its own model at the end.
+:::
+
+## Modelling pipeline, part 1 {.ht}
+
+[Appendix B · Modelling pipeline · 1/2]{.eyebrow}
+
+[From totals to a first fit]{.h2}
+
+::: {.pipe}
+::: {.prow}
+[0]{.pn}
+
+[Select covariates]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[$\displaystyle j \in \text{covariates}(t) \iff |r_{tj}| \ge 0.1 \;\text{ and }\; p_{tj} < \frac{0.05}{m}$]{.pmath}
+:::
+
+:::
+
+[Consider a covariate (car/branch-related) only if it has a significant effect on task duration.]{.ptxt}
+:::
+:::
+
+::: {.prow}
+[1]{.pn}
+
+[Starting values]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[$\displaystyle \beta_{t,0} = \operatorname{median}(y_i \mid f_{it}=1) - \operatorname{median}(y_i \mid f_{it}=0)$]{.pmath}
+:::
+
+:::
+
+[Each task duration is initialized as the median total with the task minus without it.]{.ptxt}
+:::
+:::
+
+::: {.prow}
+[2]{.pn}
+
+[Structural fit]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[$\displaystyle \min_{\beta,\,\gamma}\; \frac{1}{|S|}\sum_{i \in S} \Big|\, y_i - \big(\mathrm{wait}_i(\gamma) + \mathrm{work}_i(\beta)\big) \Big|$]{.pmath}
+:::
+
+:::
+
+[The structural equation is optimized with Powell’s method, so β gives plausible totals.]{.ptxt}
+:::
+:::
+
+:::
+
+::: {.notes}
+Step zero chooses the covariates: a covariate is considered for a task only if its correlation with the duration is at least 0.1 in absolute value and it is Bonferroni-significant. Step one gives each task a starting value from median totals with and without the task. Step two is the structural fit: Powell minimises the absolute error between rebuilt and real totals. We used validation labels for the covariate selection, so validation scores are a bit optimistic, but every coefficient is learned on train.
+:::
+
+## Modelling pipeline, part 2 {.ht}
+
+[Appendix B · Modelling pipeline · 2/2]{.eyebrow}
+
+[From a first fit to task times]{.h2}
+
+::: {.pipe}
+::: {.prow .em}
+[3]{.pn}
+
+[EM]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[E-step: each task gets its share of the unexplained time]{.flabel}
+
+[$\displaystyle \hat d_{it} = \mu_{it} + \frac{\sigma_t^2}{\sum_{s \in \mathcal{C}_i}\sigma_s^2 + \sigma_{\mathrm{wait}}^2}\, g_i$]{.pmath}
+:::
+
+::: {.pf}
+[M-step: re-estimate each task formula]{.flabel}
+
+[$\displaystyle \beta_t = \arg\min_\beta \sum_{i:\,f_{it}=1} \big(\hat d_{it} - x_{it}^\top \beta\big)^2$]{.pmath}
+:::
+
+:::
+
+[Unexplained time is split over critical-path tasks and waiting, then each task is refit.]{.ptxt}
+:::
+:::
+
+::: {.prow}
+[4]{.pn}
+
+[Waiting model]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[Median regression per staff level]{.flabel}
+
+[$\displaystyle \gamma_k = \arg\min_\gamma \sum_{i:\,k_i=k} \big|\, w_i - z_i^\top \gamma \big|$]{.pmath}
+:::
+
+::: {.pf}
+[Observed waiting time]{.flabel}
+
+[$\displaystyle w_i = \max\big(0,\; u_i - \mathrm{work}_i(\beta)\big)$]{.pmath}
+:::
+
+:::
+
+[A median regression per branch type predicts the time a car waits before work starts.]{.ptxt}
+:::
+:::
+
+::: {.prow .out}
+[→]{.pn}
+
+[Predict]{.h3}
+
+::: {.pobj}
+::: {.pforms}
+::: {.pf}
+[Predicted task duration]{.flabel}
+
+[$\displaystyle d_{it} = f_{it}\cdot\max\big(0.5,\, x_{it}^\top \beta_t\big)$]{.pmath}
+:::
+
+::: {.pf}
+[Predicted total duration]{.flabel}
+
+[$\displaystyle \hat y_i = \mathrm{wait}_i(\gamma) + \mathrm{work}_i(\beta)$]{.pmath}
+:::
+
+:::
+
+[Task formulas give the work time, the waiting time is added, counted in opening hours.]{.ptxt}
+:::
+:::
+
+:::
+
+::: {.notes}
+Step three is EM: the unexplained time of each car is shared over the tasks on its critical path and waiting, and every task is refit by least squares on those durations. That gives the final task coefficients. Step four fits waiting with a median regression per branch type. At prediction time we run the formulas forward through the opening-hours clock.
+:::
