@@ -35,21 +35,23 @@ At prediction time: formulas → work → waiting → clock. The E-step is only 
 
 ## Covariate selection
 A driver enters a task's formula if its correlation with the **true task duration on validation** (performed tasks only)
-is |r| ≥ 0.1 **and** significant after **Bonferroni correction**: p < 0.05 / 199, since we ran 199 task × variable tests.
+is |r| ≥ 0.1 **and** significant after **Bonferroni correction**: p < 0.05 / 199 = 2.5e-4, since we ran 199 task × variable tests.
 Without the correction about 10 drivers would be expected to pass by chance. Branch type enters as the staff dummies
 (airport = 3 staff, station = 2, center = 1), since they are the same split.
 
-| Task | Drivers (r on validation) | Passed p < 0.05 but dropped by Bonferroni |
+Values are r (p).
+
+| Task | Selected drivers | Dropped by Bonferroni (p < 0.05 but not < 2.5e-4) |
 |---|---|---|
-| Quick exterior | exterior dirt +0.37, airport +0.30, queue +0.21, van +0.15, station −0.11 | – |
-| Normal exterior | exterior dirt +0.62, rain +0.22, queue +0.14, van +0.12 | – |
-| Special cleaning | smoking +0.83, premium +0.29 | pet +0.17, child seat +0.13 |
-| Interior | child seat +0.65, interior dirt +0.58, rental days +0.19, km +0.16, airport +0.11 | – |
-| Damage check | damage reported +0.36 | – |
-| Refuel | airport +0.80, station −0.35, SUV +0.24, van +0.19 | rain +0.14, weekend +0.13 |
-| Charging | battery −0.96 | weekend +0.10 |
-| Repair | damage reported +0.57 | – |
-| Tyre check | airport −0.84 | return hour −0.42 |
+| Quick exterior | exterior dirt +0.37 (2e-53), airport +0.30 (3e-33), queue +0.21 (1e-16), van +0.15 (7e-9), station −0.11 (2e-5) | – |
+| Normal exterior | exterior dirt +0.62 (3e-132), rain +0.22 (1e-14), queue +0.14 (1e-6), van +0.12 (4e-5) | – |
+| Special cleaning | smoking +0.83 (6e-72), premium +0.29 (8e-7) | pet +0.17 (0.004), child seat +0.13 (0.028) |
+| Interior | child seat +0.65 (<1e-300), interior dirt +0.58 (1e-254), rental days +0.19 (8e-25), km +0.16 (6e-18), airport +0.11 (3e-9) | – |
+| Damage check | damage reported +0.36 (2e-44) | – |
+| Refuel | airport +0.80 (1e-90), station −0.35 (3e-13), SUV +0.24 (1e-6), van +0.19 (2e-4) | rain +0.14 (0.005), weekend +0.13 (0.008) |
+| Charging | battery −0.96 (1e-301) | weekend +0.10 (0.021) |
+| Repair | damage reported +0.57 (2e-7) | – |
+| Tyre check | airport −0.84 (1e-8) | return hour −0.42 (0.024) |
 
 Fuel level is not a driver of refuel time (r = +0.08): refuel takes a fixed time per branch type.
 
