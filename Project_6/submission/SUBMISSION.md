@@ -1,6 +1,6 @@
 # Submission: Project 6 – Task Time Detective, lmu-stads
 
-**Team:** lmu-stads · **Demo:** [`submission/slides.pdf`](slides.pdf)
+**Team:** lmu-stads · **Slides:** [view online](https://awinterstetter.github.io/sixt-hackathon-2026/Project_6/slides/slides.html) · [PDF](slides.pdf)
 
 ## Approach
 Train only has **total** times, so we rebuild each car's path from return to ready and fit the task formulas so the
