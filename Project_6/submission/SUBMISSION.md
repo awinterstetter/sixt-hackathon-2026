@@ -14,7 +14,7 @@ Task chains (interior→special, damage check→repair, exterior, refuel, tyre c
 ready when the busiest person is done. Charging runs in parallel. Waiting $\mathrm{wait}_i(\gamma) = \max(0, z_i^\top\gamma_{k_i})$ is a
 median regression per staff level (center 1, station 2, airport 3). Only opening hours count.
 
-**Fitting** (train.csv only, numpy/pandas/scipy, deterministic, ~3 min):
+**Fitting** (train.csv only, numpy/pandas/scipy, deterministic, ~1.5 min):
 1. Starting values: median total with the task minus without it.
 2. Powell minimises the absolute total error on 8,000 seeded cars.
 3. EM, 30 rounds: each car's unexplained time $g_i$ is shared over its critical-path tasks and waiting by variance,
@@ -78,7 +78,7 @@ pip install -r requirements.txt       # numpy, pandas, scipy (pinned)
 
 cd starter
 python run.py --repeat                # fit on train.csv, predict validation.csv -> predictions.csv,
-                                      # and check that two runs give identical values (~3 min per run)
+                                      # and check that two runs give identical values (~1.5 min per run)
 python evaluate.py predictions.csv ../data/validation_labels.csv \
     --task-truth ../data/validation_labels.csv --flags ../data/validation.csv \
     --train-truth ../data/validation_labels.csv   # prints total MAE, per-task MAE and WAPE

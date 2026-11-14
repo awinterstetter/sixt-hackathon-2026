@@ -230,6 +230,26 @@ def _assignments(k):
     return (np.array(ways)[:, :, None] == np.arange(k)).astype(float)
 
 
+@functools.lru_cache(maxsize=None)
+def _load_index(k):
+    """For each chain: flat (split, person) position it goes to in every split (one per split)."""
+    oh = _assignments(k)
+    a_, c_, k_ = oh.shape
+    return [np.arange(a_) * k_ + oh[:, c, :].argmax(1) for c in range(c_)]
+
+
+def _loads(ch, k):
+    """Work per person for every split of the chains (n x splits x k). Chains are added in the same order as
+    einsum("nc,ack->nak") and the zero terms are skipped, so the values are bit-identical, but much faster."""
+    oh = _assignments(k)
+    if k == 1:
+        return np.einsum("nc,ack->nak", ch, oh)
+    out = np.zeros((len(ch), oh.shape[0] * k))
+    for c, idx in enumerate(_load_index(k)):
+        out[:, idx] += ch[:, c, None]
+    return out.reshape(len(ch), oh.shape[0], k)
+
+
 def _durations(data, theta, sl):
     return np.column_stack([np.clip(data.X[t] @ theta[sl[t]], data.hp["min_dur"], None) * data.flags[:, TI[t]]
                             for t in TASKS])
@@ -243,9 +263,12 @@ def _work(dur, staff, critical=False):
     for k in np.unique(staff):
         m = np.where(staff == k)[0]
         oh = _assignments(int(k))
-        loads = np.einsum("nc,ack->nak", ch[m], oh)
-        best = loads.max(2).argmin(1)
-        mk[m] = loads.max(2)[np.arange(len(m)), best]
+        loads = _loads(ch[m], int(k))
+        busiest = loads[:, :, 0].copy()
+        for p in range(1, int(k)):
+            np.maximum(busiest, loads[:, :, p], out=busiest)
+        best = busiest.argmin(1)
+        mk[m] = busiest[np.arange(len(m)), best]
         if critical:   # chains done by the busiest person in the best split
             crit_ch[m] = oh[best][np.arange(len(m)), :, loads[np.arange(len(m)), best].argmax(1)] > 0
     charge = dur[:, TI["electric_charging"]]
